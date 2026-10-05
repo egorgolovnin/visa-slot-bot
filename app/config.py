@@ -20,6 +20,7 @@ class Settings:
     missions: tuple[str, ...]   # empty = auto-discover which countries VFS serves in Cyprus
     country: str
     tz: str
+    open_access: bool           # True: anyone who presses /start can use the bot; False: admin approves
 
 
 def load() -> Settings:
@@ -35,4 +36,5 @@ def load() -> Settings:
         missions=_list(os.getenv("MISSIONS", "")),
         country=os.getenv("VFS_COUNTRY", "cyp"),
         tz=os.getenv("TZ_NAME", "Europe/Nicosia"),
+        open_access=os.getenv("OPEN_ACCESS", "true").lower() in ("1", "true", "yes"),
     )

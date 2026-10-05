@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 
 from . import config
-from .bot import router
+from .bot import router, setup_commands
 from .db import Database
 from .poller import Poller
 
@@ -23,30 +23,32 @@ async def main() -> None:
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML,
                                                                link_preview_is_disabled=True))
 
-    async def notify(uid: int, text: str) -> None:
+    async def notify(uid: int, text: str) -> bool:
         for _ in range(3):
             try:
                 await bot.send_message(uid, text)
-                return
+                return True
             except TelegramRetryAfter as e:
                 await asyncio.sleep(e.retry_after)
             except TelegramForbiddenError:
-                return  # user blocked the bot
+                await db.mark_blocked_bot(uid)  # user blocked the bot or never started it
+                return False
             except Exception:
                 log.exception("notify %s failed", uid)
-                return
+                return False
+        return False
 
     poller = Poller(settings, db, notify)
     dp = Dispatcher(db=db, settings=settings, poller=poller)
     dp.include_router(router)
 
+    await setup_commands(bot, settings)
     task = asyncio.create_task(poller.run())
     try:
         await dp.start_polling(bot)
     finally:
         task.cancel()
-        await poller.client.close()
-        await poller.ss.close()
+        await poller.close()
         await db.close()
         await bot.session.close()
 

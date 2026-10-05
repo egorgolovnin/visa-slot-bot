@@ -8,38 +8,40 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
+from . import supersaas
 from .config import Settings
 from .db import Database
 from .diff import EARLIER, NOTIFY_KINDS, OPENED, Change, diff
-from . import supersaas
 from .rktermin import RkTerminClient
 from .supersaas import SuperSaasClient
 from .vfs import SCHENGEN, Blocked, NotOffered, RateLimited, Slot, VfsPublicClient
 
 log = logging.getLogger("poller")
 
-Notify = Callable[[int, str], Awaitable[None]]
+Notify = Callable[[int, str], Awaitable[bool]]
 
-BLIND_AFTER = 3          # failed cycles in a row before the admins hear "bot is blind"
-MAX_BACKOFF = 6          # max multiplier of the poll interval after 429s
-
-RK_COOLDOWN = 1800       # seconds to leave RK-Termin alone after a failed check
+FAIL_ALERT_AFTER = 3          # failed checks in a row before admins hear about one country
+MAX_BACKOFF = 6               # max multiplier of the VFS poll interval after 429s
+RK_COOLDOWN = 1800            # seconds to leave RK-Termin alone after a failed check
+REALERT_AFTER = 1800          # same slot flapping open/closed: alert again only after this
+DISCOVER_RETRIES = 3          # VFS answers transient 1019/1020 errors; retry before "not offered"
+REDISCOVER_EVERY = timedelta(days=7)
 
 # missions served by non-VFS systems: code -> display name
 RK_MISSIONS = {"deu": "Германия (+NL, BE, DK, NO, IS, LU)"}
 SS_MISSIONS = {"grc": "Греция (+Мальта)"}
+NON_VFS = set(RK_MISSIONS) | set(SS_MISSIONS) | {"mlt", "nld", "bel", "dnk", "nor", "isl", "lux"}
 
 
 @dataclass
 class Health:
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_cycle_at: datetime | None = None
-    last_ok_at: datetime | None = None
-    failures: int = 0
     last_error: str = ""
     backoff: int = 1
-    blind: bool = False
     discovering: bool = False
+    fails: dict[str, int] = field(default_factory=dict)      # consecutive failures per mission
+    alerted: set[str] = field(default_factory=set)           # missions admins were warned about
 
 
 def fmt_date(d) -> str:
@@ -57,6 +59,11 @@ class Poller:
         self.ss = SuperSaasClient(settings.proxy_url)
         self.health = Health()
         self._wake = asyncio.Event()
+        self._last_alert: dict[tuple, datetime] = {}
+
+    async def close(self) -> None:
+        await self.client.close()
+        await self.ss.close()
 
     async def alert_admins(self, text: str) -> None:
         for uid in self.s.admin_ids:
@@ -89,97 +96,119 @@ class Poller:
             if self.s.missions:
                 for code in self.s.missions:
                     await self.db.set_mission(code, SCHENGEN.get(code, code.upper()), True)
+                await self.register_static()
                 return f"Миссии из MISSIONS: {', '.join(self.s.missions)}"
             found, blocked = [], None
             for code, name in SCHENGEN.items():
-                if code in RK_MISSIONS or code in SS_MISSIONS or code == "mlt":
+                if code in NON_VFS:
                     continue
-                try:
-                    await self.client.fetch(code)
-                    await self.db.set_mission(code, name, True)
-                    found.append(name)
-                    log.info("discover %s: offered", code)
-                except NotOffered as e:
-                    await self.db.set_mission(code, name, False)
-                    log.info("discover %s: not offered (%s)", code, str(e)[:80])
-                except Blocked as e:
-                    blocked = str(e)
+                offered = None
+                for attempt in range(DISCOVER_RETRIES):
+                    try:
+                        await self.client.fetch(code)
+                        offered = True
+                        break
+                    except NotOffered as e:
+                        offered = False
+                        log.info("discover %s try %d: not offered (%s)", code, attempt + 1, str(e)[:80])
+                        await asyncio.sleep(random.uniform(2, 4))
+                    except Blocked as e:
+                        blocked = str(e)
+                        break
+                if blocked:
                     log.warning("discover %s: BLOCKED %s", code, blocked[:200])
                     break
+                await self.db.set_mission(code, name, offered)
+                if offered:
+                    found.append(name)
+                    log.info("discover %s: offered", code)
                 await asyncio.sleep(random.uniform(3, 6))
             await self.register_static()
             log.info("discover done: found=%s blocked=%s", found, bool(blocked))
             if blocked:
                 return f"Разведка прервана, VFS блокирует запросы: <code>{html.escape(blocked)}</code>"
-            return ("Найдено на VFS: " + (", ".join(found) if found else "ничего")
-                    + "\nОтдельно: " + ", ".join(RK_MISSIONS.values()) + " (система посольства)")
+            static = ", ".join(RK_MISSIONS.values()) + (", " + ", ".join(SS_MISSIONS.values()) if supersaas.enabled() else "")
+            return "Найдено на VFS: " + (", ".join(found) if found else "ничего") + f"\nОтдельно: {static}"
         finally:
             self.health.discovering = False
 
     # ---- one pass over all offered missions ----
     async def cycle(self) -> None:
         missions = await self.db.offered_missions()
-        ok, errors = 0, []
         now = datetime.now(timezone.utc)
+        vfs_paused = False
         for code, name in missions:
             if code in RK_MISSIONS and self.rk_resume_at and now < self.rk_resume_at:
                 continue
-            try:
-                slots, vfs_updated = await self.fetch(code)
-            except NotOffered:
-                await self.db.set_mission(code, name, False, "not offered")
+            is_vfs = code not in RK_MISSIONS and code not in SS_MISSIONS
+            if is_vfs and vfs_paused:
                 continue
+            try:
+                slots, updated = await self.fetch(code)
             except RateLimited as e:
+                # a VFS 429 pauses only the other VFS countries, not Germany/Greece
                 self.health.backoff = min(self.health.backoff * 2, MAX_BACKOFF)
-                errors.append(f"{code}: 429")
-                log.warning("rate limited on %s: %s", code, e)
-                break
-            except Blocked as e:
-                errors.append(f"{code}: {e}")
-                log.warning("blocked on %s: %s", code, e)
+                vfs_paused = True
+                await self._failed(code, name, f"429: {e}")
+                continue
+            except (Blocked, NotOffered) as e:
+                # NotOffered mid-cycle is usually VFS's transient 1019/1020: never disable a country here
                 if code in RK_MISSIONS:
                     self.rk_resume_at = now + timedelta(seconds=RK_COOLDOWN)
+                await self._failed(code, name, str(e))
                 continue
             except Exception as e:  # one country must never break the whole cycle
-                errors.append(f"{code}: {type(e).__name__}")
                 log.exception("unexpected error on %s", code)
+                await self._failed(code, name, f"{type(e).__name__}: {e}")
                 continue
+
             if code in RK_MISSIONS:
                 self.rk_resume_at = None
-            ok += 1
-            log.info("%s: %d pairs, %d with dates, vfs_updated=%s", code, len(slots),
-                     sum(1 for x in slots if x.earliest), vfs_updated)
-            prev = await self.db.current(code)
-            changes = diff(prev, slots)
-            first_sight = not prev
-            await self.db.save_fetch(code, slots, changes, vfs_updated)
+            log.info("%s: %d pairs, %d with dates, updated=%s", code, len(slots),
+                     sum(1 for x in slots if x.earliest), updated)
+            first_sight = not await self.db.was_fetched(code)
+            changes = diff(await self.db.current(code), slots)
+            await self.db.save_fetch(code, slots, changes, updated)
             if not first_sight:
-                await self._announce(code, name, changes, vfs_updated)
-            await asyncio.sleep(random.uniform(2, 5))
+                await self._announce(code, name, changes, updated)
+            await self._recovered(code, name)
+            if is_vfs:
+                await asyncio.sleep(random.uniform(2, 5))
 
+        if not vfs_paused:
+            self.health.backoff = 1
+        self.health.last_cycle_at = datetime.now(timezone.utc)
+
+    async def _failed(self, code: str, name: str, error: str) -> None:
         h = self.health
-        h.last_cycle_at = datetime.now(timezone.utc)
-        if ok or not missions:
-            h.last_ok_at, h.failures, h.last_error = h.last_cycle_at, 0, ""
-            if not errors:
-                h.backoff = 1
-            if h.blind:
-                h.blind = False
-                await self.alert_admins("✅ Бот снова видит слоты.")
-        else:
-            h.failures += 1
-            h.last_error = "; ".join(errors)[:500]
-            if h.failures >= BLIND_AFTER and not h.blind:
-                h.blind = True
-                await self.alert_admins(
-                    "⚠️ Бот ослеп: " + str(h.failures) + " цикла подряд без ответа VFS.\n"
-                    f"<code>{html.escape(h.last_error[:300])}</code>\n"
-                    "Если везде 403 — нужен резидентный прокси (PROXY_URL).")
+        h.fails[code] = h.fails.get(code, 0) + 1
+        h.last_error = f"{code}: {error}"[:500]
+        log.warning("check failed %s (%d in a row): %s", code, h.fails[code], error[:200])
+        await self.db.mission_error(code, error[:300])
+        if h.fails[code] >= FAIL_ALERT_AFTER and code not in h.alerted:
+            h.alerted.add(code)
+            hint = "\nЕсли везде 403 — нужен резидентный прокси (PROXY_URL)." if "403" in error else ""
+            await self.alert_admins(f"⚠️ {html.escape(name)}: {h.fails[code]} проверки подряд с ошибкой.\n"
+                                    f"<code>{html.escape(error[:300])}</code>{hint}")
 
-    async def _announce(self, code: str, name: str, changes: list[Change], vfs_updated: str) -> None:
+    async def _recovered(self, code: str, name: str) -> None:
+        h = self.health
+        h.fails[code] = 0
+        if code in h.alerted:
+            h.alerted.discard(code)
+            await self.alert_admins(f"✅ {html.escape(name)}: проверки снова работают.")
+
+    async def _announce(self, code: str, name: str, changes: list[Change], updated: str) -> None:
+        now = datetime.now(timezone.utc)
         for ch in changes:
             if ch.kind not in NOTIFY_KINDS or not ch.slot.earliest:
                 continue
+            key = (code, ch.slot.centre, ch.slot.category, ch.slot.earliest)
+            last = self._last_alert.get(key)
+            if last and (now - last).total_seconds() < REALERT_AFTER:
+                log.info("skip repeated alert %s", key)
+                continue
+            self._last_alert[key] = now
             head = "🟢 Появился слот" if ch.kind == OPENED else "⏫ Слот стал раньше"
             was = f" (было {fmt_date(ch.old)})" if ch.kind == EARLIER else ""
             text = (
@@ -187,11 +216,15 @@ class Poller:
                 f"Центр: {html.escape(ch.slot.centre)}\n"
                 f"Категория: {html.escape(ch.slot.category)}\n"
                 f"Ближайшая дата: <b>{fmt_date(ch.slot.earliest)}</b>{was}\n"
-                f"Данные от: {html.escape(vfs_updated or '—')}\n"
+                f"Данные от: {html.escape(updated or '—')}\n"
                 f"{self.page_url(code)}"
             )
+            sent = 0
             for uid in await self.db.subscribers(code, ch.slot.earliest):
-                await self.notify(uid, text)
+                if await self.notify(uid, text):
+                    sent += 1
+                    await self.db.log_event(uid, "alert", f"{code} {ch.kind} {ch.slot.earliest}")
+            log.info("alert %s %s %s -> %d users", code, ch.kind, ch.slot.earliest, sent)
 
     def wake(self) -> None:
         self._wake.set()
@@ -199,13 +232,17 @@ class Poller:
     async def run(self) -> None:
         log.info("poller started, proxy=%s", bool(self.s.proxy_url))
         await self.register_static()
-        if not await self.db.discovered():
-            result = await self.discover()
-            await self.alert_admins("🔎 Первая разведка завершена.\n" + result)
+        last_discover = await self.db.last_discovery()
+        if last_discover is None:
+            await self.alert_admins("🔎 Первая разведка завершена.\n" + await self.discover())
         while True:
             try:
+                last_discover = await self.db.last_discovery()
+                if last_discover and datetime.now(timezone.utc) - last_discover > REDISCOVER_EVERY:
+                    result = await self.discover()
+                    log.info("weekly rediscovery: %s", result)
                 await self.cycle()
-            except Exception as e:  # keep the loop alive whatever happens
+            except Exception as e:
                 log.exception("cycle crashed")
                 self.health.last_error = f"crash: {e}"[:500]
             delay = self.s.poll_interval * self.health.backoff * random.uniform(0.85, 1.15)
