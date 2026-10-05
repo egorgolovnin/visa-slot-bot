@@ -64,12 +64,16 @@ class Poller:
                     await self.client.fetch(code)
                     await self.db.set_mission(code, name, True)
                     found.append(name)
-                except NotOffered:
+                    log.info("discover %s: offered", code)
+                except NotOffered as e:
                     await self.db.set_mission(code, name, False)
+                    log.info("discover %s: not offered (%s)", code, str(e)[:80])
                 except Blocked as e:
                     blocked = str(e)
+                    log.warning("discover %s: BLOCKED %s", code, blocked[:200])
                     break
                 await asyncio.sleep(random.uniform(3, 6))
+            log.info("discover done: found=%s blocked=%s", found, bool(blocked))
             if blocked:
                 return f"Разведка прервана, VFS блокирует запросы: <code>{html.escape(blocked)}</code>"
             return "Найдено на VFS: " + (", ".join(found) if found else "ничего")
@@ -96,6 +100,8 @@ class Poller:
                 log.warning("blocked on %s: %s", code, e)
                 continue
             ok += 1
+            log.info("%s: %d pairs, %d with dates, vfs_updated=%s", code, len(slots),
+                     sum(1 for x in slots if x.earliest), vfs_updated)
             prev = await self.db.current(code)
             changes = diff(prev, slots)
             first_sight = not prev
@@ -144,6 +150,7 @@ class Poller:
         self._wake.set()
 
     async def run(self) -> None:
+        log.info("poller started, proxy=%s", bool(self.s.proxy_url))
         if not await self.db.discovered():
             result = await self.discover()
             await self.alert_admins("🔎 Первая разведка завершена.\n" + result)
