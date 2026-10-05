@@ -56,3 +56,19 @@ async def check() -> str:
     """Startup self-test: returns the app name Crypto Pay knows this token by."""
     me = await _call("getMe")
     return f"{me.get('name')} (app_id {me.get('app_id')})"
+
+
+async def delete_invoice(invoice_id: int) -> None:
+    """Make an unpaid invoice unpayable (used when re-issuing or cancelling). Errors are ignored."""
+    try:
+        await _call("deleteInvoice", invoice_id=int(invoice_id))
+    except Exception as e:
+        log.warning("deleteInvoice %s: %s", invoice_id, e)
+
+
+async def invoice_statuses(invoice_ids: list[int]) -> dict[int, dict]:
+    if not invoice_ids:
+        return {}
+    result = await _call("getInvoices", invoice_ids=",".join(map(str, invoice_ids)))
+    items = result.get("items", result) if isinstance(result, dict) else result
+    return {int(i["invoice_id"]): i for i in items}

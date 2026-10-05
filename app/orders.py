@@ -422,8 +422,23 @@ async def order_confirm_text(message: Message) -> None:
     await message.answer("Нажми «✅ Отправить заявку», «✏️ Исправить» или «✖️ Отмена» под анкетой выше.")
 
 
+_confirm_locks: dict[int, asyncio.Lock] = {}
+
+
 @router.callback_query(F.data == "ord:confirm", NewOrder.confirm)
 async def order_confirm(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
+    lock = _confirm_locks.setdefault(call.from_user.id, asyncio.Lock())
+    if lock.locked():
+        await call.answer()
+        return
+    async with lock:
+        if await state.get_state() != NewOrder.confirm.state:
+            await call.answer("Заявка уже отправлена.")
+            return
+        await _order_confirm(call, state, db, settings)
+
+
+async def _order_confirm(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
     data = await state.get_data()
     await state.clear()
     reason = await order_block_reason(db, settings, call.from_user.id, data["mission"])
@@ -471,8 +486,46 @@ async def my_orders(message: Message, db: Database, uid: int | None = None) -> N
                      + (f"\n     запись: {html.escape(r['appointment'])}" if r["appointment"] else ""))
         if r["status"] == "booked" and r["invoice_url"]:
             kb.button(text=f"Оплатить #{r['id']} — {r['price_eur']:.0f} €", url=r["invoice_url"])
+        if r["status"] in ("new", "in_progress"):
+            kb.button(text=f"✖️ Отменить #{r['id']}", callback_data=f"myo:cancel:{r['id']}")
     kb.adjust(1)
     await message.answer("\n".join(lines), reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("myo:cancel:"))
+async def client_cancel(call: CallbackQuery, db: Database, settings: Settings) -> None:
+    oid = int(call.data.split(":")[2])
+    o = await db.order(oid)
+    if not o or o["tg_id"] != call.from_user.id:
+        await call.answer("Нет такой заявки", show_alert=True)
+        return
+    if o["status"] not in ("new", "in_progress"):
+        await call.answer("Слот уже забронирован — отменить можно только через /support.", show_alert=True)
+        return
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Да, отменить", callback_data=f"myo:yes:{oid}")
+    kb.button(text="Нет", callback_data="myo:no:0")
+    await call.message.answer(f"Отменить заявку #{oid}?", reply_markup=kb.as_markup())
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("myo:yes:") | (F.data == "myo:no:0"))
+async def client_cancel_confirm(call: CallbackQuery, db: Database, settings: Settings) -> None:
+    if call.data == "myo:no:0":
+        await call.message.edit_text("Ок, заявка остаётся.")
+        await call.answer()
+        return
+    oid = int(call.data.split(":")[2])
+    o = await db.order(oid)
+    if not o or o["tg_id"] != call.from_user.id or o["status"] not in ("new", "in_progress"):
+        await call.answer("Уже нельзя отменить — напиши в /support.", show_alert=True)
+        return
+    await db.update_order(oid, status="cancelled")
+    await db.log_event(call.from_user.id, "order_cancel_client", f"#{oid}")
+    await call.message.edit_text(f"Заявка #{oid} отменена.")
+    await call.answer()
+    for a in settings.admin_ids:
+        await notify_client(call.bot, a, f"✖️ Клиент сам отменил заявку #{oid} ({html.escape(order_country(o))}).")
 
 
 # ---------------- admin ----------------
@@ -573,9 +626,20 @@ async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, sett
         return
     _, action, oid = call.data.split(":")
     oid = int(oid)
+    if action == "bookcancel":
+        await state.clear()
+        await call.message.edit_text("Ок, бронь не вносим.")
+        await call.answer()
+        return
     o = await db.order(oid)
     if not o:
         await call.answer("Нет такой заявки", show_alert=True)
+        return
+    allowed = {"take": ("new",), "book": ("new", "in_progress"), "paid": ("booked",), "invoice": ("booked",),
+               "done": ("paid",), "cancel": ("new", "in_progress", "booked")}
+    if action in allowed and o["status"] not in allowed[action]:
+        await call.answer(f"Нельзя: заявка уже в статусе «{STATUS.get(o['status'], o['status'])}». "
+                          "Открой свежую карточку: /orders", show_alert=True)
         return
     if action == "open":
         await send_admin_card(call.bot, db, call.message.chat.id, oid, settings)
@@ -586,19 +650,25 @@ async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, sett
         await state.set_state(Booking.details)
         await state.update_data(order_id=oid)
         price = o["price_eur"] if o["price_eur"] is not None else await db.price(o["mission"], settings.default_price)
-        await call.message.answer(
+        cancel_kb = InlineKeyboardBuilder()
+        cancel_kb.button(text="✖️ Не сейчас", callback_data="oa:bookcancel:0")
+        await call.message.answer(reply_markup=cancel_kb.as_markup(), text=
             f"Заявка #{oid}. Пришли <b>одним сообщением</b>:\n"
             "• PDF подтверждения записи файлом, а в подписи — дату, время и место\n"
             "  или просто текст, если PDF нет.\n"
             f"Пример подписи: <code>28.10.2026 10:00, VFS Nicosia</code>\n"
-            f"Цена по умолчанию {price:.0f} €. Другая цена — допиши в конце: <code>… ; 120</code>\n/cancel — отмена")
+            f"Цена по умолчанию {price:.0f} €. Другая цена — допиши в конце: <code>… ; 120</code>")
     elif action == "paid":
+        if o["invoice_id"] and payments.enabled():
+            await payments.delete_invoice(o["invoice_id"])
         await mark_paid(call.bot, db, settings, oid, asset="manual", amount=str(o["price_eur"] or ""))
     elif action == "invoice":
         await issue_invoice(call.bot, db, settings, oid)
     elif action == "done":
         await db.update_order(oid, status="done")
     elif action == "cancel":
+        if o["invoice_id"] and payments.enabled():
+            await payments.delete_invoice(o["invoice_id"])
         await db.update_order(oid, status="cancelled")
         await notify_client(call.bot, o["tg_id"], f"✖️ Заявка #{oid} отменена. Вопросы — /support")
     if action in ("take", "done", "cancel", "paid"):
@@ -622,10 +692,16 @@ async def booking_details(message: Message, state: FSMContext, db: Database, set
     appointment, price = parts[0], None
     if len(parts) > 1 and re.fullmatch(r"\d+(\.\d+)?", parts[-1]):
         price = float(parts[-1])
-    if not appointment:
-        await message.answer("Нужна дата и время записи в тексте или подписи к PDF.")
+    from .parsing import parse_date
+    if not appointment or not parse_date(appointment):
+        await message.answer("Не вижу даты записи. Нужна дата и время, например <code>28.10.2026 10:00, VFS Nicosia</code> "
+                             "(в тексте или в подписи к PDF). Передумал — кнопка «Не сейчас» выше.")
         return
     o = await db.order(oid)
+    if o["status"] not in ("new", "in_progress"):
+        await state.clear()
+        await message.answer(f"Заявка #{oid} уже в статусе «{STATUS.get(o['status'], o['status'])}», бронь не вношу.")
+        return
     if price is None:
         price = float(o["price_eur"]) if o["price_eur"] is not None else await db.price(o["mission"], settings.default_price)
     file_id = None
@@ -647,11 +723,13 @@ async def booking_details(message: Message, state: FSMContext, db: Database, set
 
 
 # ---------------- money ----------------
-async def notify_client(bot: Bot, uid: int, text: str, **kw) -> None:
+async def notify_client(bot: Bot, uid: int, text: str, **kw) -> bool:
     try:
         await bot.send_message(uid, text, **kw)
+        return True
     except Exception:
         log.warning("cannot message client %s", uid)
+        return False
 
 
 async def issue_invoice(bot: Bot, db: Database, settings: Settings, oid: int) -> None:
@@ -661,6 +739,8 @@ async def issue_invoice(bot: Bot, db: Database, settings: Settings, oid: int) ->
             f"Запись: <b>{html.escape(o['appointment'] or '')}</b>\n\n")
     kb = InlineKeyboardBuilder()
     if payments.enabled():
+        if o["invoice_id"]:
+            await payments.delete_invoice(o["invoice_id"])  # the old link must not stay payable
         try:
             invoice_id, url = await payments.create_invoice(oid, float(o["price_eur"]), f"Visa slot service, order #{oid}, {name}")
             await db.update_order(oid, invoice_id=invoice_id, invoice_url=url)
@@ -674,7 +754,12 @@ async def issue_invoice(bot: Bot, db: Database, settings: Settings, oid: int) ->
     else:
         pay = f"Стоимость: {o['price_eur']:.0f} €. Реквизиты для оплаты пришлёт админ."
     pdf_note = "\n\nPDF подтверждения пришлю сразу после оплаты." if (o["confirmation_file"] and settings.pdf_after_payment) else ""
-    await notify_client(bot, o["tg_id"], head + pay + pdf_note, reply_markup=kb.as_markup() if payments.enabled() else None)
+    reached = await notify_client(bot, o["tg_id"], head + pay + pdf_note,
+                                  reply_markup=kb.as_markup() if payments.enabled() else None)
+    if not reached:
+        for a in settings.admin_ids:
+            await notify_client(bot, a, f"⚠️ Клиент заявки #{oid} недоступен (заблокировал бота или удалил чат). "
+                                        "Счёт создан, но сообщение не доставлено.")
     if o["confirmation_file"] and not settings.pdf_after_payment:
         try:
             await bot.send_document(o["tg_id"], o["confirmation_file"], caption=f"Подтверждение записи, заявка #{oid}")
@@ -700,20 +785,41 @@ async def mark_paid(bot: Bot, db: Database, settings: Settings, oid: int, asset:
 
 
 async def payment_watcher(bot: Bot, db: Database, settings: Settings, every: int = 60) -> None:
+    tick = 0
     while True:
         await asyncio.sleep(every)
-        if not payments.enabled():
-            continue
+        tick += 1
         try:
-            rows = await db.awaiting_payment()
-            paid = await payments.paid_invoices([r["invoice_id"] for r in rows])
-            for r in rows:
-                inv = paid.get(int(r["invoice_id"]))
-                if inv:
-                    await mark_paid(bot, db, settings, r["id"], inv.get("paid_asset") or inv.get("asset") or "crypto",
-                                    str(inv.get("paid_amount") or inv.get("amount") or ""))
+            if payments.enabled():
+                rows = await db.awaiting_payment()
+                states = await payments.invoice_statuses([r["invoice_id"] for r in rows])
+                for r in rows:
+                    inv = states.get(int(r["invoice_id"]))
+                    if not inv:
+                        continue
+                    if inv.get("status") == "paid":
+                        await mark_paid(bot, db, settings, r["id"], inv.get("paid_asset") or inv.get("asset") or "crypto",
+                                        str(inv.get("paid_amount") or inv.get("amount") or ""))
+                    elif inv.get("status") == "expired" and not r["expired_notified"]:
+                        await db.update_order(r["id"], expired_notified=True)
+                        for a in settings.admin_ids:
+                            await notify_client(bot, a, f"⌛ Счёт по заявке #{r['id']} истёк без оплаты. "
+                                                        "Напиши клиенту через бота или выставь новый (🔁 Новый счёт).")
+            if tick % 30 == 1:  # every ~30 min: housekeeping
+                await auto_complete(bot, db, settings)
+                await db.purge_stale_forms(hours=48)
         except Exception:
             log.exception("payment watcher")
+
+
+async def auto_complete(bot: Bot, db: Database, settings: Settings) -> None:
+    """Paid orders whose appointment date has passed are done: they stop counting toward the 2-country limit."""
+    from .parsing import parse_date
+    for r in await db.orders_list(("paid",), limit=200):
+        d = parse_date(r["appointment"] or "")
+        if d and d < date.today() - timedelta(days=1):
+            await db.update_order(r["id"], status="done")
+            log.info("order #%s auto-completed (appointment %s passed)", r["id"], d)
 
 
 # ---------------- prices ----------------

@@ -64,6 +64,10 @@ async def support_cancel(call: CallbackQuery, state: FSMContext) -> None:
 async def support_message(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
     await state.clear()
     u = message.from_user
+    if await db.recent_events(u.id, "support", 60) >= 5:
+        await message.answer("Ты уже написал несколько сообщений за последний час — мы их видим и ответим. "
+                             "Пожалуйста, подожди ответа 🙏")
+        return
     orders = await db.orders_list(("new", "in_progress", "booked", "paid", "done"), tg_id=u.id, limit=5)
     order_line = ", ".join(f"#{o['id']} {o['status']}" for o in orders) or "заявок нет"
     head = (f"✉️ <b>Вопрос в поддержку</b>\nОт: {html.escape(u.full_name)}"

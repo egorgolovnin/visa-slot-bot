@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS orders_status ON orders (status);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS destination TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS expired_notified BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS support_map (
     admin_chat BIGINT NOT NULL,
     admin_msg  BIGINT NOT NULL,
@@ -382,7 +383,8 @@ class Database:
 
     async def awaiting_payment(self) -> list:
         return await self.pool.fetch(
-            "SELECT id, tg_id, invoice_id FROM orders WHERE status = 'booked' AND invoice_id IS NOT NULL")
+            """SELECT id, tg_id, invoice_id, expired_notified FROM orders
+               WHERE status = 'booked' AND invoice_id IS NOT NULL""")
 
     async def orders_summary(self) -> asyncpg.Record:
         return await self.pool.fetchrow("""
@@ -422,3 +424,13 @@ class Database:
     async def support_count(self, days: int) -> int:
         return await self.pool.fetchval(
             "SELECT count(*) FROM user_events WHERE kind = 'support' AND at > now() - make_interval(days => $1)", days)
+
+    async def purge_stale_forms(self, hours: int) -> None:
+        """Half-filled forms hold passport data in plain JSON: drop abandoned ones."""
+        await self.pool.execute(
+            "DELETE FROM fsm WHERE updated_at < now() - make_interval(hours => $1)", hours)
+
+    async def recent_events(self, tg_id: int, kind: str, minutes: int) -> int:
+        return await self.pool.fetchval(
+            """SELECT count(*) FROM user_events WHERE tg_id = $1 AND kind = $2
+               AND at > now() - make_interval(mins => $3)""", tg_id, kind, minutes)
