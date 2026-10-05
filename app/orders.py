@@ -80,8 +80,8 @@ STEPS = ["window", "full_name", "gender", "birth", "nationality", "passport", "p
          "passport_scan", "residence_exp", "phone", "email"]  # superset, real order: form_steps(mission)
 QUESTIONS = {
     "window": ("В какие даты ты можешь подать документы (быть на Кипре)?\n"
-               "Например: <code>01.11.2026-30.11.2026</code>, <code>с 1 ноября по 20 ноября</code> "
-               "или одну дату — «с этого дня». Если неважно — напиши <code>любые</code>."),
+               "Пиши как удобно: <code>ноябрь</code>, <code>конец ноября</code>, <code>5-20 ноября</code>, "
+               "<code>ближайшие 2 недели</code>, <code>01.11.2026-30.11.2026</code>. Если неважно — «Любые даты»."),
     "full_name": "Имя и фамилия <b>латиницей, как в загранпаспорте</b>.\nНапример: <code>IVAN IVANOV</code>",
     "birth": "Дата рождения, например <code>15.03.1990</code>",
     "nationality": "Гражданство — выбери кнопкой или напиши, как в паспорте (например <code>Russia</code>):",
@@ -257,8 +257,8 @@ async def order_window(message: Message, state: FSMContext, db: Database, settin
     from .parsing import parse_range
     kind, d1, d2 = parse_range(message.text)
     if kind == "error":
-        await message.answer("Не получилось разобрать даты 🙈\nПримеры: <code>01.11.2026-30.11.2026</code>, "
-                             "<code>5.11-20.11</code>, <code>с 1 ноября по 20 ноября</code> или нажми «Любые даты».",
+        await message.answer("Не получилось разобрать даты 🙈\nПопробуй так: <code>ноябрь</code>, <code>конец ноября</code>, "
+                             "<code>5-20 ноября</code>, <code>ближайшие 2 недели</code> или нажми «Любые даты».",
                              reply_markup=step_kb("window"))
         return
     today = date.today()

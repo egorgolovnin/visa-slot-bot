@@ -48,6 +48,14 @@ def parse_range(text: str) -> tuple[str, date | None, date | None]:
     t = text.strip().lower()
     if t in ANY_WORDS:
         return "any", None, None
+    my = re.fullmatch(r"(\d{1,2})[./](\d{4})", t)  # "11.2026" = the whole month
+    if my and 1 <= int(my.group(1)) <= 12:
+        d1, d2 = _month_bounds(int(my.group(1)), int(my.group(2)), date.today())
+        return "ok", max(d1, date.today()), d2
+    if not re.search(r"\d{1,2}[./]\d{1,2}", t):  # no numeric dates: try words ("ноябрь", "конец ноября"...)
+        human = parse_human_window(t)
+        if human:
+            return "ok", human[0], human[1]
     t = re.sub(r"[–—−]", "-", t)
     t = re.sub(r"^\s*с\s+", "", t)
     parts = re.split(r"\s+-\s+|\s*-\s*(?=\d{1,2}[./\s])|\s+(?:по|до|to|till|until)\s+", t, maxsplit=1)
@@ -128,3 +136,151 @@ def normalize_country(text: str) -> tuple[str | None, list[str]]:
             seen.add(v)
             out.append(v)
     return None, out[:3]
+
+
+# ---- human date windows: "ноябрь", "конец ноября", "5-20 ноября", "ближайшие 2 недели"... ----
+import calendar
+from datetime import timedelta
+
+MONTH_STEMS = {
+    "январ": 1, "феврал": 2, "март": 3, "апрел": 4, "ма": 5, "июн": 6, "июл": 7, "август": 8, "сентябр": 9,
+    "октябр": 10, "ноябр": 11, "декабр": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "oct": 10,
+    "nov": 11, "dec": 12,
+}
+_MONTH_WORD = re.compile(r"\b(январ\w*|феврал\w*|март\w*|апрел\w*|ма[йяе]\w*|июн\w*|июл\w*|август\w*|сентябр\w*|"
+                         r"октябр\w*|ноябр\w*|декабр\w*|jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|"
+                         r"sep\w*|oct\w*|nov\w*|dec\w*)\b(?:\s+(\d{4}|\d{2})\b)?", re.I)
+_NUM_WORDS = {"один": 1, "одну": 1, "одна": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6,
+              "пару": 2, "пара": 2, "несколько": 3}
+
+
+def _month_no(word: str) -> int | None:
+    w = word.lower()
+    if w.startswith("ма") and not w.startswith("мар"):
+        return 5
+    for stem, n in MONTH_STEMS.items():
+        if stem != "ма" and w.startswith(stem):
+            return n
+    return None
+
+
+def _month_bounds(month: int, year: int | None, today: date) -> tuple[date, date]:
+    if year is None:
+        year = today.year if month >= today.month else today.year + 1
+    elif year < 100:
+        year += 2000
+    last = calendar.monthrange(year, month)[1]
+    return date(year, month, 1), date(year, month, last)
+
+
+def parse_human_window(text: str, today: date | None = None) -> tuple[date, date | None] | None:
+    """Understand windows written in words. Returns (from, to|None) or None."""
+    today = today or date.today()
+    t = re.sub(r"\s+", " ", text.strip().lower().replace("ё", "е"))
+    t = re.sub(r"[–—−]", "-", t)
+
+    if re.search(r"как можно скорее|срочно|asap|побыстрее|поскорее|быстрее|ближайш\w* врем", t):
+        return today, None
+    if re.fullmatch(r"(на )?сегодня", t):
+        return today, today
+    if re.fullmatch(r"(на )?завтра", t):
+        return today + timedelta(days=1), today + timedelta(days=1)
+
+    # relative periods
+    if re.search(r"следующ\w* недел", t):
+        start = today + timedelta(days=7 - today.weekday())
+        return start, start + timedelta(days=6)
+    if re.search(r"следующ\w* месяц", t):
+        nxt = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+        return _month_bounds(nxt.month, nxt.year, today)
+    m = re.search(r"(ближайш\w*|в течени\w*)\s+(\d+|\w+)?\s*(дн\w*|день|недел\w*|месяц\w*)", t)
+    if m:
+        n_raw = m.group(2) or "1"
+        n = int(n_raw) if n_raw.isdigit() else _NUM_WORDS.get(n_raw, 1)
+        unit = m.group(3)
+        days = n if unit.startswith(("дн", "ден")) else n * 7 if unit.startswith("недел") else n * 30
+        return today, today + timedelta(days=days)
+    if re.search(r"(эт\w*|текущ\w*) недел", t):
+        return today, today + timedelta(days=6 - today.weekday())
+    if re.search(r"следующ\w* недел", t):
+        start = today + timedelta(days=7 - today.weekday())
+        return start, start + timedelta(days=6)
+    if re.search(r"(эт\w*|текущ\w*) месяц", t):
+        return today, _month_bounds(today.month, today.year, today)[1]
+    if re.search(r"следующ\w* месяц", t):
+        nxt = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+        return _month_bounds(nxt.month, nxt.year, today)
+    m = re.search(r"через (\d+|\w+)?\s*(дн\w*|день|недел\w*|месяц\w*)", t)
+    if m:
+        n_raw = m.group(1) or "1"
+        n = int(n_raw) if n_raw.isdigit() else _NUM_WORDS.get(n_raw, 1)
+        unit = m.group(2)
+        days = n if unit.startswith(("дн", "ден")) else n * 7 if unit.startswith("недел") else n * 30
+        return today + timedelta(days=days), None
+
+    months = [(_month_no(mm.group(1)), mm.group(2)) for mm in _MONTH_WORD.finditer(t)]
+    months = [(mn, int(y) if y else None) for mn, y in months if mn]
+
+    # "5-20 ноября", "с 5 по 20 ноября", "5 - 20 nov"
+    m = re.search(r"(\d{1,2})\s*(?:-|по|до)\s*(\d{1,2})\s+" + _MONTH_WORD.pattern[2:], t, re.I)
+    if m and months:
+        mn, yr = months[0]
+        start, end = _month_bounds(mn, yr, today)
+        try:
+            return start.replace(day=int(m.group(1))), start.replace(day=int(m.group(2)))
+        except ValueError:
+            return None
+
+    # "до 15 ноября", "до конца ноября", "до ноября"
+    m = re.search(r"\bдо\b", t)
+    if m and months and not re.search(r"\b(с|от|после)\b", t):
+        mn, yr = months[-1]
+        start, end = _month_bounds(mn, yr, today)
+        day = re.search(r"до (\d{1,2})\s", t + " ")
+        if day:
+            try:
+                return today, start.replace(day=int(day.group(1)))
+            except ValueError:
+                return None
+        if re.search(r"до (конца|окончания)", t):
+            return today, end
+        return today, start - timedelta(days=1)
+
+    # "после 10 ноября", "с середины ноября", "с 10 ноября" (open end)
+    if re.search(r"\b(после|с|от|начиная)\b", t) and months and len(months) == 1 and not re.search(r"\bпо\b", t):
+        mn, yr = months[0]
+        start, end = _month_bounds(mn, yr, today)
+        day = re.search(r"(\d{1,2})\s", t + " ")
+        if re.search(r"середин", t):
+            return max(today, start.replace(day=10)), None
+        if re.search(r"конц|конец", t):
+            return max(today, start.replace(day=20)), None
+        if day:
+            try:
+                d0 = start.replace(day=int(day.group(1)))
+                return max(today, d0 + timedelta(days=1) if "после" in t else d0), None
+            except ValueError:
+                return None
+        return max(today, start), None
+
+    if months:
+        # part of a month
+        mn, yr = months[0]
+        start, end = _month_bounds(mn, yr, today)
+        if len(months) >= 2:  # "ноябрь-декабрь", "ноябрь или декабрь"
+            end = _month_bounds(months[-1][0], months[-1][1] or start.year + (months[-1][0] < mn), today)[1]
+        elif re.search(r"начал|перв\w* половин", t):
+            end = start.replace(day=15)
+        elif re.search(r"середин", t):
+            start, end = start.replace(day=10), start.replace(day=20)
+        elif re.search(r"конц|конец|втор\w* половин", t):
+            start = start.replace(day=16)
+        return max(start, today), end
+
+    # "11.2026", "11/2026"
+    m = re.fullmatch(r"(\d{1,2})[./](\d{4})", t)
+    if m and 1 <= int(m.group(1)) <= 12:
+        start, end = _month_bounds(int(m.group(1)), int(m.group(2)), today)
+        return max(start, today), end
+    return None
