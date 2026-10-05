@@ -1,0 +1,179 @@
+"""German Foreign Office appointment system (RK-Termin), Nicosia embassy.
+
+The German embassy in Nicosia handles Schengen visas for Germany, the Netherlands, Belgium,
+Denmark, Norway, Iceland and Luxembourg. The calendar is public: no login, but each visit shows
+a 6-character image captcha, solved locally with ddddocr (a wrong guess just means a new try).
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import html as htmllib
+import logging
+import os
+import random
+import re
+from datetime import date, datetime
+
+from curl_cffi.requests import AsyncSession
+
+from .vfs import Blocked, Slot
+
+log = logging.getLogger("rktermin")
+
+BASE = "https://service2.diplo.de/rktermin/extern"
+LOCATION, REALM = "niko", "926"
+CENTRE = "Посольство Германии, Никосия"
+CATEGORY = "Шенген до 90 дней (DE, NL, BE, DK, NO, IS, LU)"
+NO_SLOTS = "no appointments available"
+MAX_CAPTCHA_TRIES = 8
+MONTHS_AHEAD = 3
+
+CAPTCHA_RE = re.compile(r"url\(['\"]?data:image/[a-z]+;base64,([A-Za-z0-9+/=\s]+)", re.I)
+FORM_RE = re.compile(r"<form[^>]*id=\"appointment_captcha_month\"[^>]*>(.*?)</form>", re.I | re.S)
+ACTION_RE = re.compile(r"<form[^>]*id=\"appointment_captcha_month\"[^>]*action=\"([^\"]+)\"", re.I)
+INPUT_RE = re.compile(r"<input([^>]*)>", re.I)
+ATTR_RE = re.compile(r"(\w+)=\"([^\"]*)\"")
+DAY_RE = re.compile(r"appointment_showDay\.do[^\"']*?dateStr=(\d{2}\.\d{2}\.\d{4})")
+NEXT_MONTH_RE = re.compile(r"href=\"([^\"]*appointment_showMonth\.do[^\"]*dateStr=(\d{2}\.\d{2}\.\d{4})[^\"]*)\"")
+CATEGORY_RE = re.compile(r"categoryId=(\d+)")
+
+_ocr = None
+
+
+def _solver():
+    global _ocr
+    if _ocr is None:
+        import ddddocr  # heavy import, load once
+        _ocr = ddddocr.DdddOcr(show_ad=False)
+    return _ocr
+
+
+def solve_captcha(image: bytes) -> str | None:
+    text = re.sub(r"[^a-z0-9]", "", _solver().classification(image).lower())
+    return text if len(text) == 6 else None
+
+
+def find_schengen_category(page: str) -> str | None:
+    """The category whose surrounding text mentions Schengen (not the north-Nicosia office)."""
+    for m in CATEGORY_RE.finditer(page):
+        window = re.sub(r"<[^>]+>", " ", page[max(0, m.start() - 600): m.end() + 600])
+        if "Schengen" in window and "Ayii Omologites" in window:
+            return m.group(1)
+    for m in CATEGORY_RE.finditer(page):
+        window = re.sub(r"<[^>]+>", " ", page[m.start(): m.end() + 600])
+        if "Schengen" in window:
+            return m.group(1)
+    return None
+
+
+def parse_form(page: str) -> tuple[str, dict[str, str]] | None:
+    form = FORM_RE.search(page)
+    action = ACTION_RE.search(page)
+    if not form or not action:
+        return None
+    fields: dict[str, str] = {}
+    for raw in INPUT_RE.findall(form.group(1)):
+        attrs = {k.lower(): htmllib.unescape(v) for k, v in ATTR_RE.findall(raw)}
+        name = attrs.get("name")
+        if name and attrs.get("type", "text").lower() in ("hidden", "submit", "text"):
+            fields[name] = attrs.get("value", "")
+    return htmllib.unescape(action.group(1)), fields
+
+
+def parse_days(page: str) -> list[date]:
+    days = {datetime.strptime(d, "%d.%m.%Y").date() for d in DAY_RE.findall(page)}
+    return sorted(days)
+
+
+class RkTerminClient:
+    def __init__(self, proxy_url: str | None):
+        self.proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+        self.category_id: str | None = os.getenv("RK_CATEGORY_ID") or None
+
+    def page_url(self) -> str:
+        cat = f"&categoryId={self.category_id}" if self.category_id else ""
+        return (f"{BASE}/{'appointment_showMonth' if cat else 'choose_categoryList'}.do"
+                f"?locationCode={LOCATION}&realmId={REALM}{cat}&request_locale=en")
+
+    async def _get(self, s: AsyncSession, url: str) -> str:
+        r = await s.get(url, impersonate="chrome")
+        if r.status_code != 200:
+            raise Blocked(f"rktermin {r.status_code} on {url[:80]}")
+        return r.text
+
+    async def _category(self, s: AsyncSession) -> str:
+        if self.category_id:
+            return self.category_id
+        page = await self._get(s, f"{BASE}/choose_categoryList.do?locationCode={LOCATION}&realmId={REALM}&request_locale=en")
+        cat = find_schengen_category(page)
+        if not cat:
+            log.warning("category not found, page: %s", re.sub(r"\s+", " ", page)[:1500])
+            raise Blocked("rktermin: Schengen category not found")
+        self.category_id = cat
+        log.info("rktermin category id = %s", cat)
+        return cat
+
+    async def _pass_captcha(self, s: AsyncSession, cat: str) -> str:
+        url = f"{BASE}/appointment_showMonth.do?locationCode={LOCATION}&realmId={REALM}&categoryId={cat}&request_locale=en"
+        page = await self._get(s, url)
+        img = CAPTCHA_RE.search(page)
+        form = parse_form(page)
+        if not img or not form:
+            if NO_SLOTS in page or DAY_RE.search(page):
+                return page  # no captcha shown this time
+            log.warning("captcha page not understood: %s", re.sub(r"\s+", " ", page)[:1500])
+            raise Blocked("rktermin: captcha page not understood")
+        answer = solve_captcha(base64.b64decode(re.sub(r"\s+", "", img.group(1))))
+        if not answer:
+            return ""
+        action, fields = form
+        for name in list(fields):
+            if "captcha" in name.lower() and "text" in name.lower():
+                fields[name] = answer
+        if not any("captcha" in n.lower() for n in fields):
+            fields["captchaText"] = answer
+        target = action if action.startswith("http") else f"https://service2.diplo.de{action}"
+        await asyncio.sleep(random.uniform(1.5, 3))
+        r = await s.post(target, data=fields, impersonate="chrome", headers={"referer": url})
+        if r.status_code != 200:
+            raise Blocked(f"rktermin POST {r.status_code}")
+        if "global-error" in r.text or CAPTCHA_RE.search(r.text):
+            return ""  # wrong captcha
+        return r.text
+
+    async def fetch(self) -> tuple[list[Slot], str]:
+        async with AsyncSession(proxies=self.proxies, timeout=30) as s:
+            cat = await self._category(s)
+            page = ""
+            for attempt in range(1, MAX_CAPTCHA_TRIES + 1):
+                page = await self._pass_captcha(s, cat)
+                if page:
+                    log.info("rktermin captcha passed on try %d", attempt)
+                    break
+                await asyncio.sleep(random.uniform(2, 4))
+            if not page:
+                raise Blocked(f"rktermin: captcha not solved in {MAX_CAPTCHA_TRIES} tries")
+
+            days = parse_days(page)
+            seen_months = 1
+            while not days and seen_months < MONTHS_AHEAD:
+                nxt = [m for m in NEXT_MONTH_RE.finditer(page)]
+                if not nxt:
+                    break
+                href = htmllib.unescape(nxt[-1].group(1))
+                url = href if href.startswith("http") else f"{BASE}/{href.lstrip('/')}"
+                await asyncio.sleep(random.uniform(1.5, 3))
+                page = await self._get(s, url)
+                if CAPTCHA_RE.search(page):
+                    break  # session asks for a new captcha; stop here
+                days = parse_days(page)
+                seen_months += 1
+
+            if not days and NO_SLOTS not in page:
+                log.info("rktermin page without days: %s", re.sub(r"\s+", " ", page)[:1200])
+            earliest = days[0] if days else None
+            slot = Slot("deu", CENTRE, CATEGORY, earliest, earliest.isoformat() if earliest else "")
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            log.info("rktermin: %d free days, earliest=%s, months checked=%d", len(days), earliest, seen_months)
+            return [slot], stamp

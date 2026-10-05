@@ -11,7 +11,8 @@ from typing import Awaitable, Callable
 from .config import Settings
 from .db import Database
 from .diff import EARLIER, NOTIFY_KINDS, OPENED, Change, diff
-from .vfs import SCHENGEN, Blocked, NotOffered, RateLimited, VfsPublicClient
+from .rktermin import RkTerminClient
+from .vfs import SCHENGEN, Blocked, NotOffered, RateLimited, Slot, VfsPublicClient
 
 log = logging.getLogger("poller")
 
@@ -19,6 +20,9 @@ Notify = Callable[[int, str], Awaitable[None]]
 
 BLIND_AFTER = 3          # failed cycles in a row before the admins hear "bot is blind"
 MAX_BACKOFF = 6          # max multiplier of the poll interval after 429s
+
+# missions served by non-VFS systems: code -> display name
+RK_MISSIONS = {"deu": "Германия (+NL, BE, DK, NO, IS, LU)"}
 
 
 @dataclass
@@ -43,12 +47,25 @@ class Poller:
         self.db = db
         self.notify = notify
         self.client = VfsPublicClient(settings.country, settings.proxy_url)
+        self.rk = RkTerminClient(settings.proxy_url)
         self.health = Health()
         self._wake = asyncio.Event()
 
     async def alert_admins(self, text: str) -> None:
         for uid in self.s.admin_ids:
             await self.notify(uid, text)
+
+    def page_url(self, code: str) -> str:
+        return self.rk.page_url() if code in RK_MISSIONS else self.client.page_url(code)
+
+    async def fetch(self, code: str) -> tuple[list[Slot], str]:
+        if code in RK_MISSIONS:
+            return await self.rk.fetch()
+        return await self.client.fetch(code)
+
+    async def register_static(self) -> None:
+        for code, name in RK_MISSIONS.items():
+            await self.db.set_mission(code, name, True)
 
     # ---- discovery: which Schengen missions does VFS serve in this country ----
     async def discover(self) -> str:
@@ -60,6 +77,8 @@ class Poller:
                 return f"Миссии из MISSIONS: {', '.join(self.s.missions)}"
             found, blocked = [], None
             for code, name in SCHENGEN.items():
+                if code in RK_MISSIONS:
+                    continue
                 try:
                     await self.client.fetch(code)
                     await self.db.set_mission(code, name, True)
@@ -73,10 +92,12 @@ class Poller:
                     log.warning("discover %s: BLOCKED %s", code, blocked[:200])
                     break
                 await asyncio.sleep(random.uniform(3, 6))
+            await self.register_static()
             log.info("discover done: found=%s blocked=%s", found, bool(blocked))
             if blocked:
                 return f"Разведка прервана, VFS блокирует запросы: <code>{html.escape(blocked)}</code>"
-            return "Найдено на VFS: " + (", ".join(found) if found else "ничего")
+            return ("Найдено на VFS: " + (", ".join(found) if found else "ничего")
+                    + "\nОтдельно: " + ", ".join(RK_MISSIONS.values()) + " (система посольства)")
         finally:
             self.health.discovering = False
 
@@ -86,7 +107,7 @@ class Poller:
         ok, errors = 0, []
         for code, name in missions:
             try:
-                slots, vfs_updated = await self.client.fetch(code)
+                slots, vfs_updated = await self.fetch(code)
             except NotOffered:
                 await self.db.set_mission(code, name, False, "not offered")
                 continue
@@ -140,8 +161,8 @@ class Poller:
                 f"Центр: {html.escape(ch.slot.centre)}\n"
                 f"Категория: {html.escape(ch.slot.category)}\n"
                 f"Ближайшая дата: <b>{fmt_date(ch.slot.earliest)}</b>{was}\n"
-                f"Данные VFS от: {html.escape(vfs_updated or '—')}\n"
-                f"{self.client.page_url(code)}"
+                f"Данные от: {html.escape(vfs_updated or '—')}\n"
+                f"{self.page_url(code)}"
             )
             for uid in await self.db.subscribers(code, ch.slot.earliest):
                 await self.notify(uid, text)
@@ -151,6 +172,7 @@ class Poller:
 
     async def run(self) -> None:
         log.info("poller started, proxy=%s", bool(self.s.proxy_url))
+        await self.register_static()
         if not await self.db.discovered():
             result = await self.discover()
             await self.alert_admins("🔎 Первая разведка завершена.\n" + result)

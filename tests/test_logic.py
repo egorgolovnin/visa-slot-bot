@@ -52,3 +52,19 @@ def test_missing_pair_counts_as_closed():
     assert [(c.kind, c.slot.category) for c in changes] == [(CLOSED, "Gone category")]
     # nothing returned at all: everything with a date closes
     assert [c.kind for c in diff({slots[0].key: date(2026, 10, 23)}, [])] == [CLOSED]
+
+
+def test_rktermin_parsers():
+    from app.rktermin import find_schengen_category, parse_days, parse_form
+    cats = ('<div><a href="appointment_showMonth.do?locationCode=niko&amp;realmId=926&amp;categoryId=1111">Appointments for '
+            'the application of Schengen visas (stay for less than 90 days) at the German Embassy, Ayii Omologites</a></div>'
+            '<div><a href="appointment_showMonth.do?locationCode=niko&amp;realmId=926&amp;categoryId=2222">Spouses</a></div>')
+    assert find_schengen_category(cats) == "1111"
+    form = ('<form id="appointment_captcha_month" name="appointment_captcha_month" action="/rktermin/extern/appointment_showMonth.do" method="post">'
+            '<input type="hidden" name="locationCode" value="niko" id="x"/><input type="text" name="captchaText" value="" id="appointment_captcha_month_captchaText"/>'
+            '<input type="submit" name="action:appointment_showMonth" value="Continue"/></form>')
+    action, fields = parse_form(form)
+    assert action.endswith("appointment_showMonth.do") and fields["locationCode"] == "niko" and "captchaText" in fields
+    page = ('<a href="appointment_showDay.do?locationCode=niko&amp;realmId=926&amp;categoryId=1111&amp;dateStr=24.11.2026">24</a>'
+            '<a href="appointment_showDay.do?locationCode=niko&amp;realmId=926&amp;categoryId=1111&amp;dateStr=12.11.2026">12</a>')
+    assert [d.isoformat() for d in parse_days(page)] == ["2026-11-12", "2026-11-24"]

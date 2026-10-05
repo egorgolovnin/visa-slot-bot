@@ -18,14 +18,22 @@ from .poller import Poller, fmt_date
 router = Router()
 
 HELP = (
-    "Я слежу за слотами VFS Global на Кипре и пишу, когда появляется дата.\n\n"
+    "Я слежу за слотами на шенгенские визы с Кипра и пишу, когда появляется дата.\n\n"
+    "<b>Что отслеживается</b>\n"
+    "• VFS Global, Никосия: Австрия, Венгрия, Словакия, Финляндия, Хорватия\n"
+    "• Посольство Германии: Германия, Нидерланды, Бельгия, Дания, Норвегия, Исландия, Люксембург\n\n"
+    "<b>Пока не отслеживается</b>\n"
+    "• Франция — запись через заявку на сайте посольства, календаря нет\n"
+    "• Италия — Prenotami, нужен личный кабинет (в работе)\n"
+    "• Испания, Греция, Мальта, Польша и др. — проверяем их системы\n\n"
+    "<b>Команды</b>\n"
     "/sub — выбрать страны для уведомлений\n"
     "/window hun 01.11.2026-30.11.2026 — уведомлять только о датах в окне\n"
     "/window hun off — снять окно\n"
     "/status — ближайшие даты сейчас\n"
     "/history hun — последние изменения по стране\n"
     "/stats — в какие часы появлялись слоты за 14 дней\n\n"
-    "Данные публичного API VFS отстают на 15–60 минут: увидел алерт — сразу иди записываться."
+    "Данные VFS могут отставать до часа: увидел алерт — сразу иди записываться."
 )
 ADMIN_HELP = "\n\nАдмин: /health, /discover, /users, /allow ID, /deny ID"
 MAX_LEN = 3800
@@ -109,12 +117,17 @@ async def sub(message: Message, db: Database) -> None:
 
 
 @router.callback_query(F.data.startswith("sub:"))
-async def sub_toggle(call: CallbackQuery, db: Database) -> None:
+async def sub_toggle(call: CallbackQuery, db: Database, poller: Poller, settings: Settings) -> None:
     code = call.data.split(":", 1)[1]
     on = await db.toggle_sub(call.from_user.id, code)
     name = await db.mission_name(code) or code
     await call.message.edit_reply_markup(reply_markup=await sub_keyboard(db, call.from_user.id))
     await call.answer(f"{name}: {'подписка включена' if on else 'подписка выключена'}")
+    if on:
+        rows = [r for r in await db.status() if r["code"] == code]
+        lines = ["✅ Подписка включена. Сейчас:"] + mission_lines(rows, ZoneInfo(settings.tz), poller)
+        lines.append("\nНапишу, как только появится слот или дата станет раньше.")
+        await call.message.answer("\n".join(lines))
 
 
 WINDOW_RE = re.compile(r"^(\w{3})\s+(?:(off)|(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4}))$", re.I)
@@ -145,22 +158,38 @@ async def window(message: Message, command: CommandObject, db: Database) -> None
 
 
 # ---- views ----
-@router.message(Command("status"))
-async def status(message: Message, db: Database) -> None:
-    rows = await db.status()
-    if not rows:
-        await message.answer("Данных пока нет.")
-        return
+def mission_lines(rows, tz: ZoneInfo, poller: Poller) -> list[str]:
     lines, current = [], None
     for r in rows:
         if r["code"] != current:
             current = r["code"]
-            lines.append(f"\n<b>{html.escape(r['name'])}</b> ({r['code']})")
+            lines.append(f"\n<b>{html.escape(r['name'])}</b>")
         if r["category"] is None:
             lines.append("  ещё не опрашивалась")
             continue
         mark = "🟢" if r["earliest"] else "⚪️"
-        lines.append(f"  {mark} {html.escape(r['centre'])} · {html.escape(r['category'])}: {fmt_date(r['earliest'])}")
+        when = fmt_date(r["earliest"]) if r["earliest"] else "слотов нет"
+        lines.append(f"  {mark} {html.escape(r['category'])}: <b>{when}</b>")
+        lines.append(f"     {html.escape(r['centre'])} · проверено {r['seen_at'].astimezone(tz).strftime('%H:%M')}"
+                     f" · данные от {html.escape(r['vfs_updated'] or '—')}")
+    if current:
+        lines.append(f"  {poller.page_url(current)}")
+    return lines
+
+
+@router.message(Command("status"))
+async def status(message: Message, db: Database, poller: Poller, settings: Settings) -> None:
+    rows = await db.status()
+    if not rows:
+        await message.answer("Данных пока нет.")
+        return
+    tz = ZoneInfo(settings.tz)
+    lines = ["<b>Ближайшие даты сейчас</b>"]
+    by_code: dict[str, list] = {}
+    for r in rows:
+        by_code.setdefault(r["code"], []).append(r)
+    for group in by_code.values():
+        lines += mission_lines(group, tz, poller)
     await send_long(message, lines)
 
 
