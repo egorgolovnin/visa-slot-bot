@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS visa_cases (
 );
 CREATE INDEX IF NOT EXISTS visa_cases_status ON visa_cases (status);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS case_asked BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS people INT NOT NULL DEFAULT 1;
 CREATE TABLE IF NOT EXISTS prices (
     mission   TEXT PRIMARY KEY,
     price_eur NUMERIC(10, 2) NOT NULL
@@ -392,14 +393,14 @@ class Database:
 
     # ---- orders ----
     async def create_order(self, tg_id: int, mission: str, d_from, d_to, applicant: str,
-                           destination: str | None = None, fee: float = 0.0) -> int:
+                           destination: str | None = None, fee: float = 0.0, people: int = 1) -> int:
         """Order numbers are random 6-digit values, so nobody can tell how many orders exist."""
         for _ in range(20):
             oid = await self.pool.fetchval(
-                """INSERT INTO orders (id, tg_id, mission, date_from, date_to, applicant, destination, fee_eur, status)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING RETURNING id""",
+                """INSERT INTO orders (id, tg_id, mission, date_from, date_to, applicant, destination, fee_eur, status, people)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO NOTHING RETURNING id""",
                 _random_order_no(), tg_id, mission, d_from, d_to, applicant, destination, fee,
-                "awaiting_fee" if fee > 0 else "new")
+                "awaiting_fee" if fee > 0 else "new", people)
             if oid:
                 return oid
         raise RuntimeError("could not allocate an order number")
@@ -430,7 +431,7 @@ class Database:
 
     async def orders_list(self, statuses: tuple[str, ...], tg_id: int | None = None, limit: int = 30) -> list:
         return await self.pool.fetch(
-            """SELECT o.id, o.tg_id, o.mission, o.destination, o.status, o.date_from, o.date_to, o.price_eur, o.appointment,
+            """SELECT o.id, o.tg_id, o.mission, o.destination, o.status, o.people, o.date_from, o.date_to, o.price_eur, o.appointment,
                       o.invoice_url, o.created_at, o.fee_eur, o.fee_invoice_url, o.fee_paid_at, m.name AS mission_name, u.name AS user_name
                FROM orders o LEFT JOIN missions m ON m.code = o.mission LEFT JOIN users u ON u.tg_id = o.tg_id
                WHERE o.status = ANY($1::text[]) AND ($2::bigint IS NULL OR o.tg_id = $2)

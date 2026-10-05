@@ -39,6 +39,8 @@ CONSENT = ("Оплата сервиса — после того как слот 
 
 class NewOrder(StatesGroup):
     window = State()
+    count = State()
+    same_day = State()
     full_name = State()
     gender = State()
     birth = State()
@@ -124,8 +126,21 @@ def step_kb(step: str):
 
 async def ask(message: Message, state: FSMContext, step: str, prefix: str = "") -> None:
     data = await state.get_data()
+    if step == "count":
+        await state.set_state(NewOrder.count)
+        kb = InlineKeyboardBuilder()
+        for n in range(1, MAX_PEOPLE + 1):
+            kb.button(text=("Только я" if n == 1 else f"{n} человека" if n < 5 else f"{n} человек"), callback_data=f"ord:n:{n}")
+        kb.button(text="⬅️ Назад", callback_data="ord:back")
+        kb.adjust(1, 2, 2, 1)
+        await message.answer("Сколько человек подаётся? Каждому нужен свой слот, запишем всех по одной заявке.",
+                             reply_markup=kb.as_markup())
+        return
     if data.get("editing") and step != "window":
         prefix = prefix or "Исправляем. "
+    n = data.get("n", 1)
+    if n > 1 and step in PERSONAL_KEYS + ("passport_scan",):
+        prefix = f"👤 <b>Человек {data.get('pi', 0) + 1} из {n}.</b> " + prefix
     await state.set_state(getattr(NewOrder, step))
     kb = nationality_kb([]) if step == "nationality" else step_kb(step)
     await message.answer(prefix + QUESTIONS[step], reply_markup=kb)
@@ -133,16 +148,95 @@ async def ask(message: Message, state: FSMContext, step: str, prefix: str = "") 
 
 async def next_step(message: Message, state: FSMContext, current: str, db: Database, settings: Settings) -> None:
     data = await state.get_data()
-    if data.get("editing"):  # came from the confirm screen to fix one field
+    mission = data.get("mission", "")
+    steps = personal_steps(mission)
+    if current in steps:
+        idx = steps.index(current)
+        if data.get("editing") == "field":  # one field of one person, then back to the summary
+            await commit_person(state)
+            await state.update_data(editing=False)
+            await show_confirm(message, state, db, settings)
+            return
+        if idx + 1 < len(steps):
+            await ask(message, state, steps[idx + 1])
+            return
+        await commit_person(state)
+        data = await state.get_data()
+        if data.get("editing") == "person":
+            await state.update_data(editing=False)
+            await show_confirm(message, state, db, settings)
+            return
+        dup = _duplicate_passport(data.get("people") or [])
+        if dup:
+            await state.update_data(pi=len(data["people"]) - 1)
+            await load_person(state, len(data["people"]) - 1)
+            await message.answer(f"Паспорт {html.escape(dup)} уже есть у другого человека в заявке — проверь номер.")
+            await ask(message, state, "passport")
+            return
+        if len(data["people"]) < data.get("n", 1):
+            await state.update_data(pi=len(data["people"]))
+            await ask(message, state, steps[0])
+            return
+        if "phone" in form_steps(mission) and not data.get("phone"):
+            await ask(message, state, "phone")
+            return
+        await show_confirm(message, state, db, settings)
+        return
+    if data.get("editing"):  # a shared field (dates, phone) fixed from the summary
         await state.update_data(editing=False)
         await show_confirm(message, state, db, settings)
         return
-    steps = form_steps(data.get("mission", ""))
-    idx = steps.index(current)
-    if idx + 1 < len(steps):
-        await ask(message, state, steps[idx + 1])
-    else:
+    if current == "window":
+        await ask(message, state, "count")
+    elif current == "phone":
         await show_confirm(message, state, db, settings)
+
+
+def _has_child(people: list[dict]) -> bool:
+    today = date.today()
+    for p in people:
+        if (p or {}).get("birth"):
+            b = date.fromisoformat(p["birth"])
+            if (today.year - b.year - ((today.month, today.day) < (b.month, b.day))) < 12:
+                return True
+    return False
+
+
+def _duplicate_passport(people: list[dict]) -> str | None:
+    seen = set()
+    for p in people:
+        num = (p or {}).get("passport")
+        if num and num in seen:
+            return num
+        seen.add(num)
+    return None
+
+
+PERSONAL_KEYS = ("full_name", "gender", "birth", "nationality", "passport", "passport_exp", "passport_scan",
+                 "residence_exp", "residence_receipt")
+MAX_PEOPLE = 5  # VFS noOfMaxAllowedApplicant
+
+
+def personal_steps(mission: str) -> list[str]:
+    return [s for s in form_steps(mission) if s not in ("window", "phone")]
+
+
+async def commit_person(state: FSMContext) -> None:
+    data = await state.get_data()
+    person = {k: data.get(k) for k in PERSONAL_KEYS}
+    people = list(data.get("people") or [])
+    pi = data.get("pi", 0)
+    if pi < len(people):
+        people[pi] = person
+    else:
+        people.append(person)
+    await state.update_data(people=people, **{k: None for k in PERSONAL_KEYS})
+
+
+async def load_person(state: FSMContext, k: int) -> None:
+    people = (await state.get_data()).get("people") or []
+    person = people[k] if k < len(people) else {}
+    await state.update_data(pi=k, **{key: person.get(key) for key in PERSONAL_KEYS})
 
 
 def parse_d(text: str) -> date | None:
@@ -234,13 +328,30 @@ async def order_cancel_cb(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "ord:back")
 async def order_back(call: CallbackQuery, state: FSMContext) -> None:
     current = (await state.get_state() or "").split(":")[-1]
-    steps = form_steps((await state.get_data()).get("mission", ""))
-    if current not in steps:
-        await call.answer("Анкета уже закрыта. Начать заново — /order", show_alert=True)
-        return
-    idx = steps.index(current)
+    data = await state.get_data()
+    steps = personal_steps(data.get("mission", ""))
     await call.answer()
-    await ask(call.message, state, steps[max(0, idx - 1)])
+    if current == "count":
+        await ask(call.message, state, "window")
+    elif current in ("same_day",):
+        await ask(call.message, state, "count")
+    elif current in steps:
+        idx = steps.index(current)
+        if idx > 0:
+            await ask(call.message, state, steps[idx - 1])
+        elif data.get("pi", 0) > 0:  # back to the previous person's last answer
+            k = data["pi"] - 1
+            await load_person(state, k)
+            await state.update_data(people=(data.get("people") or [])[:k + 1])
+            await ask(call.message, state, steps[-1])
+        else:
+            await ask(call.message, state, "count")
+    elif current == "phone":
+        await load_person(state, max(0, len(data.get("people") or []) - 1))
+        await state.update_data(people=(data.get("people") or [])[:-1] or [])
+        await ask(call.message, state, steps[-1])
+    else:
+        await call.message.answer("Анкета уже закрыта. Начать заново — /order")
 
 
 @router.callback_query(F.data == "ord:any", NewOrder.window)
@@ -283,6 +394,45 @@ async def order_window(message: Message, state: FSMContext, db: Database, settin
         await state.update_data(date_from=None, date_to=None)
         await message.answer("Даты подачи: <b>любые</b> ✓")
     await next_step(message, state, "window", db, settings)
+
+
+async def _set_count(message: Message, state: FSMContext, n: int, db: Database, settings: Settings) -> None:
+    await state.update_data(n=n, people=[], pi=0, **{k: None for k in PERSONAL_KEYS})
+    if n > 1:
+        await state.set_state(NewOrder.same_day)
+        kb = InlineKeyboardBuilder()
+        kb.button(text="Только в один день", callback_data="ord:sd:1")
+        kb.button(text="Можно в разные дни", callback_data="ord:sd:0")
+        kb.adjust(1)
+        await message.answer(f"Вас {n}. Записать всех в один день? Так удобнее — одна поездка в центр, "
+                             "но такие слоты появляются реже.", reply_markup=kb.as_markup())
+        return
+    await ask(message, state, personal_steps((await state.get_data())["mission"])[0])
+
+
+@router.callback_query(F.data.startswith("ord:n:"), NewOrder.count)
+async def order_count(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
+    await call.answer()
+    await _set_count(call.message, state, int(call.data.split(":")[2]), db, settings)
+
+
+@router.message(NewOrder.count, F.text, NOT_A_COMMAND)
+async def order_count_text(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    m = re.search(r"\d+", message.text)
+    n = int(m.group(0)) if m else (1 if re.search(r"\bя\b|один|одна|сам", message.text.lower()) else 0)
+    if not 1 <= n <= MAX_PEOPLE:
+        await message.answer(f"Выбери кнопкой: от 1 до {MAX_PEOPLE} человек. Больше — оформи вторую заявку.")
+        return
+    await _set_count(message, state, n, db, settings)
+
+
+@router.callback_query(F.data.startswith("ord:sd:"), NewOrder.same_day)
+async def order_same_day(call: CallbackQuery, state: FSMContext) -> None:
+    same = call.data.endswith("1")
+    await state.update_data(same_day=same)
+    await call.answer()
+    await call.message.answer("Ок, только в один день ✓" if same else "Ок, можно в разные дни ✓")
+    await ask(call.message, state, personal_steps((await state.get_data())["mission"])[0])
 
 
 @router.message(NewOrder.full_name, F.text, NOT_A_COMMAND)
@@ -479,8 +629,23 @@ async def order_email(message: Message, state: FSMContext, db: Database, setting
     await next_step(message, state, "email", db, settings)
 
 
+def person_lines(p: dict, numbered: int | None = None) -> str:
+    head = f"\n👤 <b>{numbered}. {html.escape(p.get('full_name') or '')}</b>\n" if numbered else \
+        f"Имя: {html.escape(p.get('full_name') or '')}\n"
+    return (head
+            + (f"Дата рождения: {fmt_date(date.fromisoformat(p['birth']))}\n" if p.get("birth") else "")
+            + f"Гражданство: {html.escape(p.get('nationality') or '')}\n"
+            + f"Паспорт: {html.escape(p.get('passport') or '')}"
+            + (f" до {fmt_date(date.fromisoformat(p['passport_exp']))}" if p.get("passport_exp") else "") + "\n"
+            + (f"Пол: {'мужской' if p.get('gender') == 'M' else 'женский'}\n" if p.get("gender") else "")
+            + (f"ВНЖ до: {fmt_date(date.fromisoformat(p['residence_exp']))}\n" if p.get("residence_exp")
+               else ("ВНЖ: на продлении (ресипт)\n" if p.get("residence_receipt") else "")))
+
+
 async def show_confirm(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
     data = await state.get_data()
+    people = data.get("people") or []
+    n = max(1, len(people))
     price = await db.price(data["mission"], settings.default_price)
     fee = await db.fee(data["mission"])
     if data.get("date_from"):
@@ -488,29 +653,24 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
         window = f"{fmt_date(d1)}–{fmt_date(date.fromisoformat(data['date_to']))}" if data.get("date_to") else f"с {fmt_date(d1)}"
     else:
         window = "любые"
+    each = f" × {n} = <b>{price * n:.0f} €</b>" if n > 1 else ""
+    fee_each = f" × {n} = <b>{fee * n:.2f} €</b>" if n > 1 else ""
     text = (
         "<b>Проверь заявку</b>\n"
         f"Страна: {html.escape(data['mission_name'])} ({html.escape(data.get('note', ''))})\n"
         f"Даты подачи: {window}\n"
-        f"Имя: {html.escape(data['full_name'])}\n"
-        + (f"Дата рождения: {fmt_date(date.fromisoformat(data['birth']))}\n" if data.get("birth") else "")
-        + f"Гражданство: {html.escape(data['nationality'])}\n"
-        + f"Паспорт: {html.escape(data['passport'])}"
-        + (f" до {fmt_date(date.fromisoformat(data['passport_exp']))}" if data.get("passport_exp") else "") + "\n"
-        + (f"Пол: {'мужской' if data.get('gender') == 'M' else 'женский'}\n" if data.get("gender") else "")
-        + (f"ВНЖ до: {fmt_date(date.fromisoformat(data['residence_exp']))}\n" if data.get("residence_exp")
-           else ("ВНЖ: на продлении (ресипт)\n" if data.get("residence_receipt") else ""))
-        + ("Скан паспорта: получен ✓\n" if data.get("passport_scan") else "")
+        + (f"Человек: {n}" + (", все в один день" if data.get("same_day") else ", можно в разные дни") + "\n" if n > 1 else "")
+        + ("".join(person_lines(p, i + 1) for i, p in enumerate(people)) + "\n" if n > 1 else person_lines(people[0] if people else {}))
         + (f"Телефон (для визового центра): {html.escape(data['phone'])}\n" if data.get("phone") else "")
-
         + (f"Связь: Telegram {html.escape(data['tg_contact'])} — пишем сюда, в этот чат\n\n" if data.get("tg_contact")
            else "Связь: пишем сюда, в этот чат\n\n")
-        + (f"💳 Сбор визового центра: <b>{fee:.2f} €</b> — оплачиваешь сразу после заявки, без него слот не забронировать\n"
-           f"🤝 Наш сервис: <b>{price:.0f} €</b> — после брони\n"
-           f"Итого: <b>{fee + price:.2f} €</b>\n\n" if fee else
-           f"Стоимость сервиса: <b>{price:.0f} €</b> (после брони)\n\n")
-        + (f"🏛 В день подачи оплатишь сам: {requirements(data['mission']).at_centre}.\n\n"
-           if requirements(data["mission"]).at_centre else "")
+        + (f"💳 Сбор визового центра: {fee:.2f} €{fee_each or f' — <b>{fee:.2f} €</b>'} — сразу после заявки, без него слот не забронировать\n"
+           f"🤝 Наш сервис: {price:.0f} €{each or f' — <b>{price:.0f} €</b>'} — после брони\n"
+           f"Итого: <b>{(fee + price) * n:.2f} €</b>\n\n" if fee else
+           f"Стоимость сервиса: {price:.0f} €" + (each if n > 1 else "") + " (после брони)\n\n")
+        + (f"🏛 В день подачи каждый оплачивает сам: {requirements(data['mission']).at_centre}."
+           + (" Для детей консульский сбор меньше: 6–12 лет — 45 €, до 6 лет — бесплатно." if _has_child(people) else "")
+           + "\n\n" if requirements(data["mission"]).at_centre else "")
         + CONSENT + (FEE_NOTE if fee else "")
     )
     kb = InlineKeyboardBuilder()
@@ -529,14 +689,43 @@ EDIT_LABELS = {"window": "Даты", "full_name": "Имя", "gender": "Пол", 
 
 @router.callback_query(F.data == "ord:edit", NewOrder.confirm)
 async def order_edit(call: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    people = data.get("people") or []
     kb = InlineKeyboardBuilder()
-    steps = form_steps((await state.get_data()).get("mission", ""))
-    for step, label in EDIT_LABELS.items():
-        if step in steps:
-            kb.button(text=label, callback_data=f"ord:fix:{step}")
+    kb.button(text="Даты", callback_data="ord:fix:window")
+    if "phone" in form_steps(data.get("mission", "")):
+        kb.button(text="Телефон", callback_data="ord:fix:phone")
+    if len(people) > 1:
+        for i, p in enumerate(people):
+            kb.button(text=f"👤 {p.get('full_name') or i + 1}", callback_data=f"ord:fixp:{i}")
+    else:
+        for step in personal_steps(data.get("mission", "")):
+            kb.button(text=EDIT_LABELS.get(step, step), callback_data=f"ord:fixf:0:{step}")
     kb.adjust(2)
     await call.message.answer("Что исправить?", reply_markup=kb.as_markup())
     await call.answer()
+
+
+@router.callback_query(F.data.startswith("ord:fixp:"), NewOrder.confirm)
+async def order_fix_person(call: CallbackQuery, state: FSMContext) -> None:
+    k = int(call.data.split(":")[2])
+    data = await state.get_data()
+    p = (data.get("people") or [{}])[k]
+    kb = InlineKeyboardBuilder()
+    for step in personal_steps(data.get("mission", "")):
+        kb.button(text=EDIT_LABELS.get(step, step), callback_data=f"ord:fixf:{k}:{step}")
+    kb.adjust(2)
+    await call.message.answer(f"Что исправить у {html.escape(p.get('full_name') or str(k + 1))}?", reply_markup=kb.as_markup())
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("ord:fixf:"), NewOrder.confirm)
+async def order_fix_field(call: CallbackQuery, state: FSMContext) -> None:
+    _, _, k, step = call.data.split(":")
+    await load_person(state, int(k))
+    await state.update_data(editing="field")
+    await call.answer()
+    await ask(call.message, state, step)
 
 
 @router.callback_query(F.data.startswith("ord:fix:"), NewOrder.confirm)
@@ -576,25 +765,26 @@ async def _order_confirm(call: CallbackQuery, state: FSMContext, db: Database, s
         await call.message.edit_text(reason)
         await call.answer()
         return
-    applicant = {k: data.get(k) for k in ("full_name", "gender", "birth", "nationality", "passport", "passport_exp",
-                                          "passport_scan", "residence_exp", "residence_receipt", "phone", "email",
-                                          "tg_contact")}
+    people = data.get("people") or []
+    n = max(1, len(people))
+    applicant = {"people": people, "phone": data.get("phone"), "tg_contact": data.get("tg_contact"),
+                 "same_day": bool(data.get("same_day")) if n > 1 else None}
     d_from = date.fromisoformat(data["date_from"]) if data.get("date_from") else None
     d_to = date.fromisoformat(data["date_to"]) if data.get("date_to") else None
-    fee = await db.fee(data["mission"])
+    fee = await db.fee(data["mission"]) * n
     order_id = await db.create_order(call.from_user.id, data["mission"], d_from, d_to, security.encrypt(applicant),
-                                     destination=data.get("destination"), fee=fee)
+                                     destination=data.get("destination"), fee=fee, people=n)
     await db.log_event(call.from_user.id, "order_new", f"#{order_id} {data.get('destination')}")
     await call.answer()
     if fee > 0:
         await call.message.edit_text(f"✅ Заявка <b>#{order_id}</b> принята: {html.escape(data['mission_name'])}.")
         await issue_fee_invoice(call.bot, db, settings, order_id)
-        header = f"💳 Новая заявка — ждём оплату сбора {fee:.2f} €. Бронировать пока рано."
+        header = f"💳 Новая заявка{f' на {n} чел.' if n > 1 else ''} — ждём оплату сбора {fee:.2f} €. Бронировать пока рано."
     else:
         await call.message.edit_text(
             f"✅ Заявка <b>#{order_id}</b> принята: {html.escape(data['mission_name'])}.\n"
             "Как только поймаем слот и запишем тебя — пришлю подтверждение и детали. Статус — /myorders")
-        header = "🆕 Новая заявка"
+        header = "🆕 Новая заявка" + (f" на {n} чел." if n > 1 else "")
     for admin_id in settings.admin_ids:
         await send_admin_card(call.bot, db, admin_id, order_id, settings, header=header)
 
@@ -623,7 +813,8 @@ async def my_orders(message: Message, db: Database, uid: int | None = None) -> N
         return
     lines, kb = ["<b>Мои заявки</b>"], InlineKeyboardBuilder()
     for r in rows:
-        lines.append(f"#{r['id']} {html.escape(order_country(r))} — {STATUS.get(r['status'], r['status'])}"
+        lines.append(f"#{r['id']} {html.escape(order_country(r))}" + (f" · {r['people']} чел." if r["people"] > 1 else "")
+                     + f" — {STATUS.get(r['status'], r['status'])}"
                      + (f"\n     запись: {html.escape(r['appointment'])}" if r["appointment"] else ""))
         if r["status"] == "booked" and r["invoice_url"]:
             kb.button(text=f"Оплатить #{r['id']} — {r['price_eur']:.0f} €", url=r["invoice_url"])
@@ -705,8 +896,14 @@ def _d(iso: str | None) -> str:
         return iso
 
 
+def applicant_people(a: dict) -> list[dict]:
+    """New orders keep a list of people; older ones stored a single applicant at the top level."""
+    return a.get("people") or [a]
+
+
 def admin_card_text(o, tz: ZoneInfo) -> str:
     a = security.decrypt(o["applicant"])
+    people = applicant_people(a)
     window = f"{fmt_date(o['date_from'])}–{fmt_date(o['date_to'])}" if o["date_from"] else "любые"
     lines = [
         f"<b>Заявка #{o['id']}</b> · {STATUS.get(o['status'], o['status'])}",
@@ -714,22 +911,27 @@ def admin_card_text(o, tz: ZoneInfo) -> str:
         f"Клиент: {o['user_name'] or '—'}" + (f" @{html.escape(o['username'])}" if o["username"] else "")
         + f" (<code>{o['tg_id']}</code>)",
         f"Создана: {o['created_at'].astimezone(tz).strftime('%d.%m %H:%M')}",
-        "",
-        f"<code>{html.escape(a.get('full_name', ''))}</code>",
-        f"Рождение: {_d(a.get('birth'))} · {html.escape(a.get('nationality', ''))}",
-        f"Паспорт: <code>{html.escape(a.get('passport', ''))}</code> до {_d(a.get('passport_exp'))}",
-        (f"Тел: <code>{html.escape(a['phone'])}</code>" if a.get("phone") else "Тел: —")
-        + (f" · <code>{html.escape(a['email'])}</code>" if a.get("email") else ""),
     ]
-    if a.get("gender"):
-        lines.insert(6, f"Пол: {'M' if a['gender'] == 'M' else 'F'}")
-    if a.get("residence_exp") or a.get("residence_receipt"):
-        lines.append(f"ВНЖ: до {_d(a['residence_exp'])}" if a.get("residence_exp") else "ВНЖ: ⚠️ на продлении (ресипт)")
+    if len(people) > 1:
+        lines.append(f"Человек: <b>{len(people)}</b>" + (" · только в один день" if a.get("same_day") else " · можно в разные дни"))
+    for i, p in enumerate(people, 1):
+        lines.append("")
+        lines.append((f"{i}. " if len(people) > 1 else "") + f"<code>{html.escape(p.get('full_name') or '')}</code>"
+                     + (f" · {p['gender']}" if p.get("gender") else ""))
+        lines.append(" · ".join(x for x in [
+            f"рожд. {_d(p.get('birth'))}" if p.get("birth") else "", html.escape(p.get("nationality") or "")] if x))
+        lines.append(f"Паспорт: <code>{html.escape(p.get('passport') or '')}</code>"
+                     + (f" до {_d(p.get('passport_exp'))}" if p.get("passport_exp") else ""))
+        if p.get("residence_exp") or p.get("residence_receipt"):
+            lines.append(f"ВНЖ: до {_d(p['residence_exp'])}" if p.get("residence_exp") else "ВНЖ: ⚠️ на продлении (ресипт)")
+    lines.append("")
+    lines.append((f"Тел: <code>{html.escape(a['phone'])}</code>" if a.get("phone") else "Тел: —")
+                 + (f" · <code>{html.escape(a['email'])}</code>" if a.get("email") else ""))
+    if o["appointment"]:
+        lines.append(f"\nЗапись: <b>{html.escape(o['appointment'])}</b>")
     if o["fee_eur"] and float(o["fee_eur"]) > 0:
         lines.append(f"Сбор: {o['fee_eur']:.2f} € — " + (f"✅ оплачен ({html.escape(o['fee_paid'] or '')})"
                                                           if o["fee_paid_at"] else "⏳ не оплачен"))
-    if o["appointment"]:
-        lines.append(f"\nЗапись: <b>{html.escape(o['appointment'])}</b>")
     if o["price_eur"] is not None:
         lines.append(f"Цена: {o['price_eur']:.0f} €" + (f" · оплачено {o['paid_amount']} {o['paid_asset']}" if o["paid_asset"] else ""))
     return "\n".join(lines)
@@ -743,10 +945,10 @@ async def send_admin_card(bot: Bot, db: Database, chat_id: int, order_id: int, s
     text = (header + "\n\n" if header else "") + admin_card_text(o, ZoneInfo(settings.tz))
     try:
         msg = await bot.send_message(chat_id, text, reply_markup=admin_buttons(o).as_markup())
-        scan = security.decrypt(o["applicant"]).get("passport_scan")
-        if scan:
-            await bot.send_document(chat_id, scan, caption=f"Скан паспорта, заявка #{o['id']}",
-                                    reply_to_message_id=msg.message_id)
+        for p in applicant_people(security.decrypt(o["applicant"])):
+            if p.get("passport_scan"):
+                await bot.send_document(chat_id, p["passport_scan"], reply_to_message_id=msg.message_id,
+                                        caption=f"Скан паспорта: {p.get('full_name') or ''}, заявка #{o['id']}")
     except Exception:
         log.exception("admin card to %s failed", chat_id)
 
@@ -805,7 +1007,8 @@ async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, sett
     elif action == "book":
         await state.set_state(Booking.details)
         await state.update_data(order_id=oid)
-        price = o["price_eur"] if o["price_eur"] is not None else await db.price(o["mission"], settings.default_price)
+        price = (o["price_eur"] if o["price_eur"] is not None
+                 else await db.price(o["mission"], settings.default_price) * (o["people"] or 1))
         cancel_kb = InlineKeyboardBuilder()
         cancel_kb.button(text="✖️ Не сейчас", callback_data="oa:bookcancel:0")
         await call.message.answer(reply_markup=cancel_kb.as_markup(), text=
@@ -860,7 +1063,8 @@ async def booking_details(message: Message, state: FSMContext, db: Database, set
         await message.answer(f"Заявка #{oid} уже в статусе «{STATUS.get(o['status'], o['status'])}», бронь не вношу.")
         return
     if price is None:
-        price = float(o["price_eur"]) if o["price_eur"] is not None else await db.price(o["mission"], settings.default_price)
+        price = (float(o["price_eur"]) if o["price_eur"] is not None
+                 else await db.price(o["mission"], settings.default_price) * (o["people"] or 1))
     file_id = None
     if message.document:
         # strip metadata (author, software, EXIF) and rename before the client ever sees the file
