@@ -23,7 +23,6 @@ USER_COMMANDS = [
     ("myorders", "Мои заявки и оплата"),
     ("sub", "Выбрать страны для уведомлений"),
     ("mysubs", "Мои подписки"),
-    ("window", "Окно дат: /window hun 01.11.2026-30.11.2026"),
     ("history", "История по стране: /history hun"),
     ("help", "Что умеет бот"),
 ]
@@ -241,36 +240,8 @@ async def mysubs(message: Message, db: Database) -> None:
     lines = ["<b>Мои подписки</b>"]
     for r in rows:
         name = await db.mission_name(r["mission"]) or r["mission"]
-        window = f" · окно {fmt_date(r['date_from'])}–{fmt_date(r['date_to'])}" if r["date_from"] else ""
-        lines.append(f"• {html.escape(name)} (<code>{r['mission']}</code>){window}")
+        lines.append(f"• {html.escape(name)}")
     await message.answer("\n".join(lines))
-
-
-WINDOW_RE = re.compile(r"^(\w{3})\s+(?:(off)|(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4}))$", re.I)
-
-
-@router.message(Command("window"))
-async def window(message: Message, command: CommandObject, db: Database) -> None:
-    m = WINDOW_RE.match((command.args or "").strip())
-    if not m:
-        await message.answer("Формат: /window hun 01.11.2026-30.11.2026 или /window hun off\nКоды стран — в /mysubs.")
-        return
-    code = m.group(1).lower()
-    if m.group(2):
-        d_from = d_to = None
-    else:
-        try:
-            d_from = datetime.strptime(m.group(3), "%d.%m.%Y").date()
-            d_to = datetime.strptime(m.group(4), "%d.%m.%Y").date()
-        except ValueError:
-            await message.answer("Неверная дата.")
-            return
-        if d_from > d_to:
-            d_from, d_to = d_to, d_from
-    if not await db.set_window(message.from_user.id, code, d_from, d_to):
-        await message.answer(f"Сначала подпишись на {code} через /sub.")
-        return
-    await message.answer("Окно снято." if d_from is None else f"Окно {code}: {fmt_date(d_from)} – {fmt_date(d_to)}")
 
 
 # ---- views ----
