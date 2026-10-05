@@ -116,6 +116,12 @@ class Database:
 
     async def save_fetch(self, mission: str, slots: list[Slot], changes: list[Change], vfs_updated: str) -> None:
         async with self.pool.acquire() as c, c.transaction():
+            # categories VFS no longer returns have no date now
+            await c.execute(
+                """UPDATE current_slots SET earliest = NULL, raw_date = '', vfs_updated = $2, seen_at = now()
+                   WHERE mission = $1 AND earliest IS NOT NULL
+                     AND NOT ((centre, category) = ANY(SELECT * FROM unnest($3::text[], $4::text[])))""",
+                mission, vfs_updated, [s.centre for s in slots], [s.category for s in slots])
             await c.executemany(
                 """INSERT INTO current_slots (mission, centre, category, earliest, raw_date, vfs_updated, seen_at)
                    VALUES ($1, $2, $3, $4, $5, $6, now())

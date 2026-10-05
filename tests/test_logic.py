@@ -43,3 +43,12 @@ def test_new_pair_only_reported_if_has_date():
     slots = parse_response("hun", SAMPLE)
     changes = diff({}, slots)
     assert [c.kind for c in changes] == [OPENED]
+
+
+def test_missing_pair_counts_as_closed():
+    slots = parse_response("hun", SAMPLE)
+    prev = {("Nicosia", "Gone category"): date(2026, 10, 30), slots[0].key: date(2026, 10, 23)}
+    changes = diff(prev, slots)
+    assert [(c.kind, c.slot.category) for c in changes] == [(CLOSED, "Gone category")]
+    # nothing returned at all: everything with a date closes
+    assert [c.kind for c in diff({slots[0].key: date(2026, 10, 23)}, [])] == [CLOSED]

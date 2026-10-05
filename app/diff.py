@@ -17,8 +17,17 @@ class Change:
 
 
 def diff(prev: dict[tuple[str, str], date | None], current: list[Slot]) -> list[Change]:
-    """Compare the stored state with a fresh fetch. Pairs missing from the fetch are ignored."""
+    """Compare the stored state with a fresh fetch.
+
+    VFS omits categories that have no date, so a pair that had a date and is now missing
+    counts as closed.
+    """
     changes: list[Change] = []
+    seen = {s.key for s in current}
+    for key, old in prev.items():
+        if key not in seen and old is not None:
+            centre, category = key
+            changes.append(Change(CLOSED, Slot(current[0].mission if current else "", centre, category, None, ""), old))
     for s in current:
         if s.key not in prev:
             if s.earliest:

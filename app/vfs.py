@@ -93,6 +93,7 @@ class VfsPublicClient:
         proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
         self.session = AsyncSession(proxies=proxies, timeout=30)
         self.working_profile: str | None = None
+        self._raw_logged: set[str] = set()
 
     async def close(self) -> None:
         await self.session.close()
@@ -125,6 +126,9 @@ class VfsPublicClient:
             if r.status_code == 200 and text.lstrip().startswith("{"):
                 data = r.json()
                 self.working_profile = profile
+                if mission not in self._raw_logged:
+                    self._raw_logged.add(mission)
+                    log.info("raw %s: %s", mission, text[:1500])
                 if isinstance(data, dict) and data.get("vacList"):
                     return parse_response(mission, data), str(data.get("lastUpdatedOn") or "")
                 raise NotOffered(text[:200])
