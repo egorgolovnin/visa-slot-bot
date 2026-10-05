@@ -7,7 +7,8 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 
 from . import config
-from .bot import router, setup_commands
+from . import orders
+from .bot import TrackingMiddleware, attach_access, router, setup_commands
 from .db import Database
 from .poller import Poller
 
@@ -40,14 +41,20 @@ async def main() -> None:
 
     poller = Poller(settings, db, notify)
     dp = Dispatcher(db=db, settings=settings, poller=poller)
-    dp.include_router(router)
+    dp.message.outer_middleware(TrackingMiddleware())
+    dp.callback_query.outer_middleware(TrackingMiddleware())
+    for r in (orders.router, router):  # orders first: its state handlers must beat the catch-all
+        attach_access(r)
+        dp.include_router(r)
 
     await setup_commands(bot, settings)
     task = asyncio.create_task(poller.run())
+    pay_task = asyncio.create_task(orders.payment_watcher(bot, db, settings))
     try:
         await dp.start_polling(bot)
     finally:
         task.cancel()
+        pay_task.cancel()
         await poller.close()
         await db.close()
         await bot.session.close()

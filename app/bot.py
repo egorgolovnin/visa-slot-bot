@@ -18,6 +18,8 @@ from .poller import Poller, fmt_date
 router = Router()
 
 USER_COMMANDS = [
+    ("order", "Заявка: забронируем слот за тебя"),
+    ("myorders", "Мои заявки и оплата"),
     ("sub", "Выбрать страны для уведомлений"),
     ("status", "Ближайшие даты сейчас"),
     ("mysubs", "Мои подписки"),
@@ -28,6 +30,8 @@ USER_COMMANDS = [
 ]
 ADMIN_COMMANDS = [
     ("admin", "Панель админа"),
+    ("orders", "Открытые заявки"),
+    ("price", "Цены: /price hun 120"),
     ("users", "Пользователи"),
     ("user", "Карточка: /user ID"),
     ("link", "Ссылка с меткой: /link community"),
@@ -48,6 +52,8 @@ HELP = (
     "• Франция: заявка на demarche.numerique.gouv.fr → «Demande de rendez-vous visas - Chypre»\n"
     "• Испания: письмо на emb.nicosia.sc@maec.es, тема CITA PREVIA\n"
     "• Италия: prenotami.esteri.it (мониторинг в работе)\n\n"
+    "<b>Запись под ключ</b>\n"
+    "/order — оставь заявку, мы поймаем и забронируем слот на твои данные. Оплата в крипте — только после брони.\n\n"
     "<b>Команды</b>\n" + "\n".join(f"/{c} — {d}" for c, d in USER_COMMANDS) + "\n\n"
     "Данные VFS могут отставать до часа: увидел алерт — сразу иди записываться."
 )
@@ -115,9 +121,9 @@ class AccessMiddleware(BaseMiddleware):
         return None
 
 
-for observer in (router.message, router.callback_query):
-    observer.outer_middleware(TrackingMiddleware())
-    observer.middleware(AccessMiddleware())
+def attach_access(r: Router) -> None:
+    r.message.middleware(AccessMiddleware())
+    r.callback_query.middleware(AccessMiddleware())
 
 
 async def send_long(message: Message, lines: list[str], **kw) -> None:
@@ -335,12 +341,14 @@ def admin_keyboard():
     kb.button(text="👥 Пользователи", callback_data="adm:users:0")
     kb.button(text="🩺 Проверки", callback_data="adm:health")
     kb.button(text="📈 По дням", callback_data="adm:days")
+    kb.button(text="📋 Заявки", callback_data="adm:orders")
     kb.adjust(2)
     return kb.as_markup()
 
 
 async def dashboard_text(db: Database) -> str:
     u = await db.user_summary()
+    o = await db.orders_summary()
     lines = [
         "<b>Панель админа</b>",
         "",
@@ -350,6 +358,10 @@ async def dashboard_text(db: Database) -> str:
         f"🚫 Забанено: {u['banned']} · заблокировали бота: {u['blocked_bot']}"
         + (f" · ждут доступа: {u['pending']}" if u["pending"] else ""),
         f"🔔 Алертов отправлено: {await db.alerts_sent(1)} за сутки · {await db.alerts_sent(7)} за 7 дн",
+        "",
+        "<b>Заявки</b>",
+        f"🆕 {o['new']} новых · 🔎 {o['in_progress']} в работе · 📅 {o['booked']} ждут оплаты · 💰 {o['paid']} оплачено",
+        f"Выручка: {o['revenue_30d']:.0f} € за 30 дн · {o['revenue_total']:.0f} € всего",
         "",
         "<b>Источники</b>",
     ]
@@ -427,6 +439,18 @@ async def admin_cb(call: CallbackQuery, db: Database, settings: Settings, poller
         text, kb = await dashboard_text(db), admin_keyboard()
     elif parts[1] == "users":
         text, kb = await users_text(db, int(parts[2]), tz)
+    elif parts[1] == "orders":
+        from .orders import OPEN, STATUS
+        rows = await db.orders_list(OPEN, limit=40)
+        kb_o = InlineKeyboardBuilder()
+        lines = ["<b>Открытые заявки</b>"] if rows else ["Открытых заявок нет."]
+        for r in rows:
+            window = f"{fmt_date(r['date_from'])}–{fmt_date(r['date_to'])}" if r["date_from"] else "любые"
+            lines.append(f"#{r['id']} {html.escape(r['mission_name'] or r['mission'])} · {window} · {STATUS[r['status']]}")
+            kb_o.button(text=f"#{r['id']}", callback_data=f"oa:open:{r['id']}")
+        kb_o.button(text="⬅️ Панель", callback_data="adm:dash")
+        kb_o.adjust(5)
+        text, kb = "\n".join(lines), kb_o.as_markup()
     elif parts[1] == "health":
         text, kb = await health_text(db, poller, tz), back.as_markup()
     else:

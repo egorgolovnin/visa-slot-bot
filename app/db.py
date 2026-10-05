@@ -71,7 +71,34 @@ CREATE TABLE IF NOT EXISTS user_events (
 );
 CREATE INDEX IF NOT EXISTS user_events_at ON user_events (at DESC);
 CREATE INDEX IF NOT EXISTS user_events_user ON user_events (tg_id, at DESC);
+
+CREATE TABLE IF NOT EXISTS orders (
+    id                BIGSERIAL PRIMARY KEY,
+    tg_id             BIGINT NOT NULL REFERENCES users (tg_id),
+    mission           TEXT NOT NULL,
+    date_from         DATE,
+    date_to           DATE,
+    applicant         TEXT NOT NULL,           -- encrypted JSON
+    status            TEXT NOT NULL DEFAULT 'new',
+    price_eur         NUMERIC(10, 2),
+    appointment       TEXT,
+    confirmation_file TEXT,
+    invoice_id        BIGINT,
+    invoice_url       TEXT,
+    paid_at           TIMESTAMPTZ,
+    paid_asset        TEXT,
+    paid_amount       TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS orders_status ON orders (status);
+CREATE TABLE IF NOT EXISTS prices (
+    mission   TEXT PRIMARY KEY,
+    price_eur NUMERIC(10, 2) NOT NULL
+);
 """
+
+ACTIVE = ("new", "in_progress")
 
 
 class Database:
@@ -302,3 +329,62 @@ class Database:
                  AND (s.date_from IS NULL OR $2 >= s.date_from)
                  AND (s.date_to IS NULL OR $2 <= s.date_to)""", mission, d)
         return [r["tg_id"] for r in rows]
+
+    # ---- orders ----
+    async def create_order(self, tg_id: int, mission: str, d_from, d_to, applicant: str) -> int:
+        return await self.pool.fetchval(
+            """INSERT INTO orders (tg_id, mission, date_from, date_to, applicant)
+               VALUES ($1, $2, $3, $4, $5) RETURNING id""", tg_id, mission, d_from, d_to, applicant)
+
+    async def order(self, order_id: int) -> asyncpg.Record | None:
+        return await self.pool.fetchrow(
+            """SELECT o.*, m.name AS mission_name, u.name AS user_name, u.username
+               FROM orders o LEFT JOIN missions m ON m.code = o.mission
+               LEFT JOIN users u ON u.tg_id = o.tg_id WHERE o.id = $1""", order_id)
+
+    async def update_order(self, order_id: int, **fields) -> None:
+        cols = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
+        await self.pool.execute(
+            f"UPDATE orders SET {cols}, updated_at = now() WHERE id = $1", order_id, *fields.values())
+
+    async def orders_list(self, statuses: tuple[str, ...], tg_id: int | None = None, limit: int = 30) -> list:
+        return await self.pool.fetch(
+            """SELECT o.id, o.tg_id, o.mission, o.status, o.date_from, o.date_to, o.price_eur, o.appointment,
+                      o.invoice_url, o.created_at, m.name AS mission_name, u.name AS user_name
+               FROM orders o LEFT JOIN missions m ON m.code = o.mission LEFT JOIN users u ON u.tg_id = o.tg_id
+               WHERE o.status = ANY($1::text[]) AND ($2::bigint IS NULL OR o.tg_id = $2)
+               ORDER BY o.created_at DESC LIMIT $3""", list(statuses), tg_id, limit)
+
+    async def active_orders_for(self, mission: str) -> list:
+        return await self.pool.fetch(
+            """SELECT id, date_from, date_to FROM orders
+               WHERE mission = $1 AND status = ANY($2::text[]) ORDER BY created_at""", mission, list(ACTIVE))
+
+    async def awaiting_payment(self) -> list:
+        return await self.pool.fetch(
+            "SELECT id, tg_id, invoice_id FROM orders WHERE status = 'booked' AND invoice_id IS NOT NULL")
+
+    async def orders_summary(self) -> asyncpg.Record:
+        return await self.pool.fetchrow("""
+            SELECT count(*) FILTER (WHERE status = 'new')         AS new,
+                   count(*) FILTER (WHERE status = 'in_progress') AS in_progress,
+                   count(*) FILTER (WHERE status = 'booked')      AS booked,
+                   count(*) FILTER (WHERE status IN ('paid', 'done')) AS paid,
+                   COALESCE(sum(price_eur) FILTER (WHERE status IN ('paid', 'done')
+                            AND paid_at > now() - interval '30 days'), 0) AS revenue_30d,
+                   COALESCE(sum(price_eur) FILTER (WHERE status IN ('paid', 'done')), 0) AS revenue_total
+            FROM orders""")
+
+    async def price(self, mission: str, default: float) -> float:
+        v = await self.pool.fetchval("SELECT price_eur FROM prices WHERE mission = $1", mission)
+        return float(v) if v is not None else default
+
+    async def set_price(self, mission: str, price: float) -> None:
+        await self.pool.execute(
+            """INSERT INTO prices (mission, price_eur) VALUES ($1, $2)
+               ON CONFLICT (mission) DO UPDATE SET price_eur = EXCLUDED.price_eur""", mission, price)
+
+    async def prices(self) -> list:
+        return await self.pool.fetch(
+            """SELECT m.code, m.name, p.price_eur FROM missions m LEFT JOIN prices p ON p.mission = m.code
+               WHERE m.offered ORDER BY m.name""")

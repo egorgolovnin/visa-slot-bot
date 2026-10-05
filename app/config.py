@@ -21,6 +21,8 @@ class Settings:
     country: str
     tz: str
     open_access: bool           # True: anyone who presses /start can use the bot; False: admin approves
+    default_price: float        # EUR per booked slot unless /price sets one for the country
+    pdf_after_payment: bool     # True: the booking PDF is sent only once the invoice is paid
 
 
 def load() -> Settings:
@@ -37,4 +39,6 @@ def load() -> Settings:
         country=os.getenv("VFS_COUNTRY", "cyp"),
         tz=os.getenv("TZ_NAME", "Europe/Nicosia"),
         open_access=os.getenv("OPEN_ACCESS", "true").lower() in ("1", "true", "yes"),
+        default_price=float(os.getenv("PRICE_EUR", "150")),
+        pdf_after_payment=os.getenv("PDF_AFTER_PAYMENT", "true").lower() in ("1", "true", "yes"),
     )

@@ -225,6 +225,12 @@ class Poller:
                     sent += 1
                     await self.db.log_event(uid, "alert", f"{code} {ch.kind} {ch.slot.earliest}")
             log.info("alert %s %s %s -> %d users", code, ch.kind, ch.slot.earliest, sent)
+            waiting = [o for o in await self.db.active_orders_for(code)
+                       if (o["date_from"] is None or o["date_from"] <= ch.slot.earliest)
+                       and (o["date_to"] is None or ch.slot.earliest <= o["date_to"])]
+            if waiting:
+                ids = ", ".join(f"#{o['id']}" for o in waiting)
+                await self.alert_admins(f"⚡ {text}\n\n<b>Подходит заявкам: {ids}</b> → /orders")
 
     def wake(self) -> None:
         self._wake.set()

@@ -3,3 +3,4 @@ asyncpg==0.31.0
 curl_cffi==0.16.3
 ddddocr==1.6.1
 tzdata
+cryptography==46.0.6
