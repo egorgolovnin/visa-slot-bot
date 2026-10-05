@@ -138,6 +138,10 @@ CREATE TABLE IF NOT EXISTS visa_cases (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS visa_cases_status ON visa_cases (status);
+ALTER TABLE visa_cases ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'bot';
+ALTER TABLE visa_cases ADD COLUMN IF NOT EXISTS external_id TEXT;
+ALTER TABLE visa_cases ADD COLUMN IF NOT EXISTS extra JSONB;
+CREATE UNIQUE INDEX IF NOT EXISTS visa_cases_ext ON visa_cases (source, external_id) WHERE external_id IS NOT NULL;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS case_asked BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS people INT NOT NULL DEFAULT 1;
 CREATE TABLE IF NOT EXISTS prices (
@@ -568,3 +572,16 @@ class Database:
         return await self.pool.fetch(
             """SELECT id, tg_id, destination, mission, appointment FROM orders
                WHERE status IN ('paid', 'done') AND NOT case_asked AND appointment IS NOT NULL""")
+
+    async def upsert_external_case(self, source: str, external_id: str, **f) -> bool:
+        """Insert or refresh an imported case. Returns True if it is new."""
+        exists = await self.pool.fetchval(
+            "SELECT 1 FROM visa_cases WHERE source = $1 AND external_id = $2", source, external_id)
+        cols = ["source", "external_id"] + list(f)
+        vals = [source, external_id] + list(f.values())
+        placeholders = ", ".join(f"${i + 1}" for i in range(len(vals)))
+        updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in f)
+        await self.pool.execute(
+            f"""INSERT INTO visa_cases ({", ".join(cols)}) VALUES ({placeholders})
+                ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET {updates}""", *vals)
+        return not exists

@@ -257,6 +257,22 @@ class Poller:
         data = await probe(self.s.country, ["hun", "aut", "svk", "fin", "hrv"], self.s.proxy_url)
         await self.alert_admins(summarize(data)[:3800])
 
+    async def import_open_cases(self) -> None:
+        """Once a day: refresh the open case base from cases.visarea.travel."""
+        from datetime import date as _date
+        from .import_cases import import_visarea
+        today = _date.today().isoformat()
+        if await self.db.kv_get("visarea_import") == today:
+            return
+        try:
+            summary = await import_visarea(self.db)
+            first = await self.db.kv_get("visarea_import") is None
+            await self.db.kv_set("visarea_import", today)
+            if first:
+                await self.alert_admins("📥 " + summary)
+        except Exception as e:
+            log.warning("visarea import failed: %s", e)
+
     async def run(self) -> None:
         log.info("poller started, proxy=%s", bool(self.s.proxy_url))
         await self.register_static()
@@ -264,18 +280,13 @@ class Poller:
             await self.probe_vfs_fields()
         except Exception:
             log.exception("vfs fields probe")
-        try:
-            if await self.db.kv_get("visarea_probe") != "v1":
-                await self.db.kv_set("visarea_probe", "v1")
-                from .competitor import probe
-                await probe()
-        except Exception:
-            log.exception("visarea probe")
+        await self.import_open_cases()
         last_discover = await self.db.last_discovery()
         if last_discover is None:
             await self.alert_admins("🔎 Первая разведка завершена.\n" + await self.discover())
         while True:
             try:
+                await self.import_open_cases()
                 last_discover = await self.db.last_discovery()
                 if last_discover and datetime.now(timezone.utc) - last_discover > REDISCOVER_EVERY:
                     result = await self.discover()

@@ -116,6 +116,8 @@ function render(d) {
           ${d.median_days != null ? `<div><b>${d.median_days} ${plural(d.median_days, "день", "дня", "дней")}</b><span>обычно ждут решения</span></div>` : ""}
           <div><b>${d.total}</b><span>${plural(d.total, "кейс", "кейса", "кейсов")} всего</span></div>
         </div>
+        ${d.sources && d.sources.visarea ? `<p class="muted" style="margin-top:12px;font-size:13.5px">Из них ${d.sources.visarea} — из открытой базы
+          <a href="https://cases.visarea.travel" rel="noopener" target="_blank">cases.visarea.travel</a>, ${d.sources.bot} — от наших клиентов.</p>` : ""}
       </div>
     </section>
 
@@ -137,10 +139,11 @@ function render(d) {
         <h3>${esc(c.country)}: ${OUT[c.outcome]}</h3>
         <div class="sub">Подача: ${month(c.month)}${c.days != null ? `. Решение через ${c.days} ${plural(c.days, "день", "дня", "дней")}` : ""}${c.visa_kind ? `. Виза ${c.visa_kind === "multi" ? "многократная" : "однократная"}` : ""}.</div>
         ${c.comment ? `<blockquote>${esc(c.comment)}</blockquote>` : ""}
+        ${c.source === "visarea" ? `<div class="sub" style="margin-top:8px">Источник: <a href="https://cases.visarea.travel" rel="noopener" target="_blank">cases.visarea.travel</a></div>` : ""}
       </article>`).join("")}</div>
     </section>
     ${cta}
-    <footer>Кейсы присылают сами заявители и проходят модерацию. Статистика не является гарантией решения консульства.</footer>`);
+    <footer>Кейсы присылают сами заявители: наши клиенты (проходят модерацию) и участники открытой базы cases.visarea.travel. Статистика не является гарантией решения консульства.</footer>`);
 }
 </script>
 </body>
