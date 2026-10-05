@@ -16,6 +16,8 @@ import re
 from collections import Counter
 from datetime import date, datetime
 
+from urllib.parse import urljoin
+
 from curl_cffi.requests import AsyncSession
 
 from .vfs import Blocked, Slot
@@ -213,7 +215,7 @@ class RkTerminClient:
                 if not nxt:
                     break
                 href = htmllib.unescape(nxt[-1].group(1))
-                url = href if href.startswith("http") else f"{BASE}/{href.lstrip('/')}"
+                url = urljoin("https://service2.diplo.de/rktermin/", href)
                 await asyncio.sleep(random.uniform(1.5, 3))
                 page = await self._get(s, url)
                 if CAPTCHA_RE.search(page):
