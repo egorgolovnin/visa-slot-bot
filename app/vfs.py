@@ -108,18 +108,26 @@ class VfsPublicClient:
     async def close(self) -> None:
         await self.session.close()
 
-    def page_url(self, mission: str) -> str:
-        return f"https://visa.vfsglobal.com/{self.country}/en/{mission}"
+    @staticmethod
+    def split(code: str, default_country: str) -> tuple[str, str]:
+        """'are-fra' -> ('are', 'fra'); plain 'hun' -> (default_country, 'hun')."""
+        return tuple(code.split("-", 1)) if "-" in code else (default_country, code)
 
-    async def fetch(self, mission: str) -> tuple[list[Slot], str]:
-        """Returns (slots, VFS lastUpdatedOn). Raises NotOffered / RateLimited / Blocked."""
-        payload = {"missionCode": mission, "countryCode": self.country, "cultureCode": "en-US"}
+    def page_url(self, code: str) -> str:
+        country, mission = self.split(code, self.country)
+        return f"https://visa.vfsglobal.com/{country}/en/{mission}"
+
+    async def fetch(self, code: str) -> tuple[list[Slot], str]:
+        """Returns (slots, VFS lastUpdatedOn). Raises NotOffered / RateLimited / Blocked.
+        `code` is a mission in the default country ('hun') or 'country-mission' ('are-fra')."""
+        country, mission = self.split(code, self.country)
+        payload = {"missionCode": mission, "countryCode": country, "cultureCode": "en-US"}
         headers = {
             "accept": "application/json, text/plain, */*",
             "content-type": "application/json",
             "origin": "https://visa.vfsglobal.com",
             "referer": "https://visa.vfsglobal.com/",
-            "route": f"{self.country}/en/{mission}",
+            "route": f"{country}/en/{mission}",
         }
         profiles = (self.working_profile,) + tuple(p for p in IMPERSONATE if p != self.working_profile) \
             if self.working_profile else IMPERSONATE
@@ -141,7 +149,7 @@ class VfsPublicClient:
                     log.info("raw %s: %s", mission, text[:1500])
                 self.last_age_min = data_age_minutes(data) if isinstance(data, dict) else None
                 if isinstance(data, dict) and data.get("vacList"):
-                    return parse_response(mission, data), str(data.get("lastUpdatedOn") or "")
+                    return parse_response(code, data), str(data.get("lastUpdatedOn") or "")
                 raise NotOffered(text[:200])
             last = f"{r.status_code}: {text[:120]}"
             log.debug("profile %s rejected for %s: %s", profile, mission, last)

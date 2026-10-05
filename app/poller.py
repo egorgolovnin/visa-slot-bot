@@ -30,6 +30,9 @@ REDISCOVER_EVERY = timedelta(days=7)
 
 # missions served by non-VFS systems: code -> display name
 RK_MISSIONS = {"deu": "Германия (+NL, BE, DK, NO, IS, LU)"}
+# VFS centres outside Cyprus (for clients who live there): code = "<vfs country>-<mission>"
+ABROAD_MISSIONS = {"are-fra": "Франция (ОАЭ, Абу-Даби)", "are-ita": "Италия (ОАЭ, Дубай)",
+                   "are-deu": "Германия (ОАЭ, Дубай)", "srb-hrv": "Хорватия (Сербия, Белград)"}
 SS_MISSIONS = {"grc": "Греция (+Мальта)"}
 NON_VFS = set(RK_MISSIONS) | set(SS_MISSIONS) | {"mlt", "nld", "bel", "dnk", "nor", "isl", "lux"}
 
@@ -86,6 +89,8 @@ class Poller:
 
     async def register_static(self) -> None:
         for code, name in RK_MISSIONS.items():
+            await self.db.set_mission(code, name, True)
+        for code, name in ABROAD_MISSIONS.items():
             await self.db.set_mission(code, name, True)
         for code, name in SS_MISSIONS.items():
             await self.db.set_mission(code, name, supersaas.enabled())
@@ -251,11 +256,11 @@ class Poller:
     async def probe_vfs_fields(self) -> None:
         """Once per deployment version: record the VFS booking-form configuration for each country."""
         from .vfs_fields import probe, summarize
-        if await self.db.kv_get("vfs_fields_probe") == "v1":
+        if await self.db.kv_get("vfs_fields_probe_abroad") == "v1":
             return
-        await self.db.kv_set("vfs_fields_probe", "v1")
-        data = await probe(self.s.country, ["hun", "aut", "svk", "fin", "hrv"], self.s.proxy_url)
-        await self.alert_admins(summarize(data)[:3800])
+        await self.db.kv_set("vfs_fields_probe_abroad", "v1")
+        for country, missions in (("are", ["fra", "ita", "deu"]), ("srb", ["hrv"])):
+            await probe(country, missions, self.s.proxy_url)
 
     async def import_open_cases(self) -> None:
         """Once a day: refresh the open case base from cases.visarea.travel."""
