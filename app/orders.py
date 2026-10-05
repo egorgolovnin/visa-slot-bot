@@ -491,7 +491,7 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
         f"Имя: {html.escape(data['full_name'])}\n"
         f"Дата рождения: {fmt_date(date.fromisoformat(data['birth']))}\n"
         f"Гражданство: {html.escape(data['nationality'])}\n"
-        f"Паспорт: {security.mask(data['passport'])} до {fmt_date(date.fromisoformat(data['passport_exp']))}\n"
+        f"Паспорт: {html.escape(data['passport'])} до {fmt_date(date.fromisoformat(data['passport_exp']))}\n"
         + (f"Пол: {'мужской' if data.get('gender') == 'M' else 'женский'}\n" if data.get("gender") else "")
         + (f"ВНЖ до: {fmt_date(date.fromisoformat(data['residence_exp']))}\n" if data.get("residence_exp")
            else ("ВНЖ: на продлении (ресипт)\n" if data.get("residence_receipt") else ""))
