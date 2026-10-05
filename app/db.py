@@ -95,6 +95,11 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS orders_status ON orders (status);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS destination TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS expired_notified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS fee_eur NUMERIC(10, 2) NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS fee_invoice_id BIGINT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS fee_invoice_url TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS fee_paid_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS fee_paid TEXT;
 CREATE TABLE IF NOT EXISTS support_map (
     admin_chat BIGINT NOT NULL,
     admin_msg  BIGINT NOT NULL,
@@ -121,9 +126,12 @@ CREATE TABLE IF NOT EXISTS prices (
     mission   TEXT PRIMARY KEY,
     price_eur NUMERIC(10, 2) NOT NULL
 );
+ALTER TABLE prices ALTER COLUMN price_eur DROP NOT NULL;
+ALTER TABLE prices ADD COLUMN IF NOT EXISTS fee_eur NUMERIC(10, 2);
 """
 
-ACTIVE = ("new", "in_progress")
+ACTIVE = ("new", "in_progress")           # bookable: fee (if any) is paid
+OPEN_STATUSES = ("awaiting_fee", "new", "in_progress", "booked", "paid")
 
 
 def _random_order_no() -> int:
@@ -367,13 +375,14 @@ class Database:
 
     # ---- orders ----
     async def create_order(self, tg_id: int, mission: str, d_from, d_to, applicant: str,
-                           destination: str | None = None) -> int:
+                           destination: str | None = None, fee: float = 0.0) -> int:
         """Order numbers are random 6-digit values, so nobody can tell how many orders exist."""
         for _ in range(20):
             oid = await self.pool.fetchval(
-                """INSERT INTO orders (id, tg_id, mission, date_from, date_to, applicant, destination)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING RETURNING id""",
-                _random_order_no(), tg_id, mission, d_from, d_to, applicant, destination)
+                """INSERT INTO orders (id, tg_id, mission, date_from, date_to, applicant, destination, fee_eur, status)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING RETURNING id""",
+                _random_order_no(), tg_id, mission, d_from, d_to, applicant, destination, fee,
+                "awaiting_fee" if fee > 0 else "new")
             if oid:
                 return oid
         raise RuntimeError("could not allocate an order number")
@@ -405,7 +414,7 @@ class Database:
     async def orders_list(self, statuses: tuple[str, ...], tg_id: int | None = None, limit: int = 30) -> list:
         return await self.pool.fetch(
             """SELECT o.id, o.tg_id, o.mission, o.destination, o.status, o.date_from, o.date_to, o.price_eur, o.appointment,
-                      o.invoice_url, o.created_at, m.name AS mission_name, u.name AS user_name
+                      o.invoice_url, o.created_at, o.fee_eur, o.fee_invoice_url, o.fee_paid_at, m.name AS mission_name, u.name AS user_name
                FROM orders o LEFT JOIN missions m ON m.code = o.mission LEFT JOIN users u ON u.tg_id = o.tg_id
                WHERE o.status = ANY($1::text[]) AND ($2::bigint IS NULL OR o.tg_id = $2)
                ORDER BY o.created_at DESC LIMIT $3""", list(statuses), tg_id, limit)
@@ -413,7 +422,7 @@ class Database:
     async def open_order_missions(self, tg_id: int) -> set[str]:
         rows = await self.pool.fetch(
             """SELECT DISTINCT mission FROM orders WHERE tg_id = $1
-               AND status IN ('new', 'in_progress', 'booked', 'paid')""", tg_id)
+               AND status IN ('awaiting_fee', 'new', 'in_progress', 'booked', 'paid')""", tg_id)
         return {r["mission"] for r in rows}
 
     async def active_orders_for(self, mission: str) -> list:
@@ -428,7 +437,9 @@ class Database:
 
     async def orders_summary(self) -> asyncpg.Record:
         return await self.pool.fetchrow("""
-            SELECT count(*) FILTER (WHERE status = 'new')         AS new,
+            SELECT count(*) FILTER (WHERE status = 'awaiting_fee') AS awaiting_fee,
+                   COALESCE(sum(fee_eur) FILTER (WHERE fee_paid_at IS NOT NULL), 0) AS fees_total,
+                   count(*) FILTER (WHERE status = 'new')         AS new,
                    count(*) FILTER (WHERE status = 'in_progress') AS in_progress,
                    count(*) FILTER (WHERE status = 'booked')      AS booked,
                    count(*) FILTER (WHERE status IN ('paid', 'done')) AS paid,
@@ -446,10 +457,25 @@ class Database:
             """INSERT INTO prices (mission, price_eur) VALUES ($1, $2)
                ON CONFLICT (mission) DO UPDATE SET price_eur = EXCLUDED.price_eur""", mission, price)
 
+    async def fee(self, mission: str) -> float:
+        from .requirements_by_country import requirements
+        v = await self.pool.fetchval("SELECT fee_eur FROM prices WHERE mission = $1", mission)
+        return float(v) if v is not None else requirements(mission).fee_at_booking
+
+    async def set_fee(self, mission: str, fee: float) -> None:
+        await self.pool.execute(
+            """INSERT INTO prices (mission, fee_eur) VALUES ($1, $2)
+               ON CONFLICT (mission) DO UPDATE SET fee_eur = EXCLUDED.fee_eur""", mission, fee)
+
     async def prices(self) -> list:
         return await self.pool.fetch(
-            """SELECT m.code, m.name, p.price_eur FROM missions m LEFT JOIN prices p ON p.mission = m.code
+            """SELECT m.code, m.name, p.price_eur, p.fee_eur FROM missions m LEFT JOIN prices p ON p.mission = m.code
                WHERE m.offered ORDER BY m.name""")
+
+    async def awaiting_fee(self) -> list:
+        return await self.pool.fetch(
+            """SELECT id, tg_id, fee_invoice_id FROM orders
+               WHERE status = 'awaiting_fee' AND fee_invoice_id IS NOT NULL""")
 
     # ---- support ----
     async def map_support(self, admin_chat: int, admin_msg: int, user_id: int) -> None:

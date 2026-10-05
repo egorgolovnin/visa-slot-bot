@@ -24,23 +24,29 @@ log = logging.getLogger("orders")
 router = Router()
 
 STATUS = {
+    "awaiting_fee": "💳 ждёт оплаты сбора",
     "new": "🆕 новая", "in_progress": "🔎 ищем слот", "booked": "📅 забронировано, ждёт оплаты",
     "paid": "💰 оплачено", "done": "✅ завершено", "cancelled": "✖️ отменена",
 }
-OPEN = ("new", "in_progress", "booked", "paid")
+OPEN = ("awaiting_fee", "new", "in_progress", "booked", "paid")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[a-z]{2,}$", re.I)
 DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
-CONSENT = ("Оплата — после того как слот забронирован. Запись делается на твои данные, "
+FEE_NOTE = ("\n\nСбор визового центра мы платим при бронировании от твоего имени. Если до брони передумаешь "
+            "или мы не сможем найти слот — вернём его.")
+CONSENT = ("Оплата сервиса — после того как слот забронирован. Запись делается на твои данные, "
            "перенести её на другие даты или на другого человека нельзя. Передумал — напиши в /support до брони.")
 
 
 class NewOrder(StatesGroup):
     window = State()
     full_name = State()
+    gender = State()
     birth = State()
     nationality = State()
     passport = State()
     passport_exp = State()
+    passport_scan = State()
+    residence_exp = State()
     phone = State()
     email = State()
     confirm = State()
@@ -68,7 +74,10 @@ DESTINATIONS: dict[str, tuple[str, str, str]] = {
     "mlt": ("Мальта", "grc", "подача в посольстве Греции"),
 }
 
-STEPS = ["window", "full_name", "birth", "nationality", "passport", "passport_exp", "phone", "email"]
+from .requirements_by_country import form_steps, requirements  # noqa: E402
+
+STEPS = ["window", "full_name", "gender", "birth", "nationality", "passport", "passport_exp",
+         "passport_scan", "residence_exp", "phone", "email"]  # superset, real order: form_steps(mission)
 QUESTIONS = {
     "window": ("В какие даты ты можешь подать документы (быть на Кипре)?\n"
                "Например: <code>01.11.2026-30.11.2026</code>, <code>с 1 ноября по 20 ноября</code> "
@@ -78,6 +87,11 @@ QUESTIONS = {
     "nationality": "Гражданство — выбери кнопкой или напиши, как в паспорте (например <code>Russia</code>):",
     "passport": "Номер загранпаспорта (буквы и цифры):",
     "passport_exp": "До какого числа действует паспорт? Например <code>01.01.2031</code>",
+    "gender": "Пол (как в паспорте):",
+    "passport_scan": ("Пришли <b>фото разворота паспорта с фотографией</b> — его требует визовый центр при записи. "
+                      "Фото должно быть чётким, все поля читаются. Файл видит только администратор."),
+    "residence_exp": ("До какого числа действует твой <b>ВНЖ Кипра</b>? Например <code>15.08.2027</code>\n"
+                      "Визу дают только если ВНЖ действует минимум 3 месяца после возвращения из поездки."),
     "phone": "Телефон для связи, например <code>+35799123456</code>",
     "email": "Email — на него придёт подтверждение записи:",
 }
@@ -90,10 +104,15 @@ def is_admin(uid: int, settings: Settings) -> bool:
 
 def step_kb(step: str):
     kb = InlineKeyboardBuilder()
-    if STEPS.index(step) > 0:
+    if step == "gender":
+        kb.button(text="Мужской", callback_data="ord:g:M")
+        kb.button(text="Женский", callback_data="ord:g:F")
+    if step != "window":
         kb.button(text="⬅️ Назад", callback_data="ord:back")
     if step == "window":
         kb.button(text="Любые даты", callback_data="ord:any")
+    if step == "residence_exp":
+        kb.button(text="ВНЖ на продлении (есть ресипт)", callback_data="ord:receipt")
     kb.button(text="✖️ Отмена", callback_data="ord:cancel")
     kb.adjust(2)
     return kb.as_markup()
@@ -114,9 +133,10 @@ async def next_step(message: Message, state: FSMContext, current: str, db: Datab
         await state.update_data(editing=False)
         await show_confirm(message, state, db, settings)
         return
-    idx = STEPS.index(current)
-    if idx + 1 < len(STEPS):
-        await ask(message, state, STEPS[idx + 1])
+    steps = form_steps(data.get("mission", ""))
+    idx = steps.index(current)
+    if idx + 1 < len(steps):
+        await ask(message, state, steps[idx + 1])
     else:
         await show_confirm(message, state, db, settings)
 
@@ -196,12 +216,13 @@ async def order_cancel_cb(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "ord:back")
 async def order_back(call: CallbackQuery, state: FSMContext) -> None:
     current = (await state.get_state() or "").split(":")[-1]
-    if current not in STEPS:
+    steps = form_steps((await state.get_data()).get("mission", ""))
+    if current not in steps:
         await call.answer("Анкета уже закрыта. Начать заново — /order", show_alert=True)
         return
-    idx = STEPS.index(current)
+    idx = steps.index(current)
     await call.answer()
-    await ask(call.message, state, STEPS[max(0, idx - 1)])
+    await ask(call.message, state, steps[max(0, idx - 1)])
 
 
 @router.callback_query(F.data == "ord:any", NewOrder.window)
@@ -343,6 +364,78 @@ async def order_pexp(message: Message, state: FSMContext, db: Database, settings
     await next_step(message, state, "passport_exp", db, settings)
 
 
+@router.callback_query(F.data.startswith("ord:g:"), NewOrder.gender)
+async def order_gender(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
+    g = call.data.split(":")[2]
+    await state.update_data(gender=g)
+    await call.answer()
+    await call.message.answer(f"Пол: <b>{'мужской' if g == 'M' else 'женский'}</b> ✓")
+    await next_step(call.message, state, "gender", db, settings)
+
+
+@router.message(NewOrder.gender, F.text, NOT_A_COMMAND)
+async def order_gender_text(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    t = message.text.strip().lower()
+    g = "M" if t in ("м", "муж", "мужской", "m", "male") else "F" if t in ("ж", "жен", "женский", "f", "female") else None
+    if not g:
+        await message.answer("Выбери кнопкой: мужской или женский.", reply_markup=step_kb("gender"))
+        return
+    await state.update_data(gender=g)
+    await next_step(message, state, "gender", db, settings)
+
+
+@router.message(NewOrder.passport_scan, F.photo | F.document)
+async def order_passport_scan(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    from aiogram.types import BufferedInputFile
+    from .sanitize import clean_file
+    if message.document and not ((message.document.mime_type or "").startswith("image/")
+                                 or (message.document.mime_type or "") == "application/pdf"):
+        await message.answer("Нужно фото или PDF разворота паспорта.", reply_markup=step_kb("passport_scan"))
+        return
+    if message.photo:
+        file_id, mime, name = message.photo[-1].file_id, "image/jpeg", "passport.jpg"
+    else:
+        file_id, mime, name = message.document.file_id, message.document.mime_type, message.document.file_name
+    raw = await message.bot.download(file_id)
+    data, new_name = clean_file(raw.read(), mime, name, "passport")
+    # re-upload the cleaned copy into the admin chat so the stored file has no metadata
+    admin_id = next(iter(settings.admin_ids))
+    stored = await message.bot.send_document(admin_id, BufferedInputFile(data, filename=new_name),
+                                             caption="📎 скан паспорта (заявка оформляется)", disable_notification=True)
+    await state.update_data(passport_scan=stored.document.file_id)
+    await message.answer("Скан получен ✓")
+    await next_step(message, state, "passport_scan", db, settings)
+
+
+@router.message(NewOrder.residence_exp, F.text, NOT_A_COMMAND)
+async def order_residence(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    d = parse_d(message.text)
+    if not d:
+        await message.answer("Не похоже на дату. Пример: <code>15.08.2027</code>", reply_markup=step_kb("residence_exp"))
+        return
+    data = await state.get_data()
+    trip_end = date.fromisoformat(data["date_to"]) if data.get("date_to") else (
+        date.fromisoformat(data["date_from"]) if data.get("date_from") else date.today()) + timedelta(days=30)
+    need = trip_end + timedelta(days=90)
+    if d < need:
+        await message.answer(
+            f"⚠️ Для визы ВНЖ должен действовать минимум 3 месяца после возвращения — примерно до "
+            f"<b>{fmt_date(need)}</b> или дольше. С ВНЖ до {fmt_date(d)} в визе, скорее всего, откажут.\n"
+            "Если ВНЖ сейчас на продлении — нажми кнопку ниже (Австрия, например, принимает ресипт + старый ВНЖ).",
+            reply_markup=step_kb("residence_exp"))
+        return
+    await state.update_data(residence_exp=d.isoformat(), residence_receipt=False)
+    await next_step(message, state, "residence_exp", db, settings)
+
+
+@router.callback_query(F.data == "ord:receipt", NewOrder.residence_exp)
+async def order_receipt(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
+    await state.update_data(residence_exp=None, residence_receipt=True)
+    await call.answer()
+    await call.message.answer("Отметил: ВНЖ на продлении. Админ проверит, принимает ли страна ресипт.")
+    await next_step(call.message, state, "residence_exp", db, settings)
+
+
 @router.message(NewOrder.phone, F.text, NOT_A_COMMAND)
 async def order_phone(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
     phone = re.sub(r"[^\d+]", "", message.text)
@@ -370,6 +463,7 @@ async def order_email(message: Message, state: FSMContext, db: Database, setting
 async def show_confirm(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
     data = await state.get_data()
     price = await db.price(data["mission"], settings.default_price)
+    fee = await db.fee(data["mission"])
     if data.get("date_from"):
         d1 = date.fromisoformat(data["date_from"])
         window = f"{fmt_date(d1)}–{fmt_date(date.fromisoformat(data['date_to']))}" if data.get("date_to") else f"с {fmt_date(d1)}"
@@ -383,8 +477,16 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
         f"Дата рождения: {fmt_date(date.fromisoformat(data['birth']))}\n"
         f"Гражданство: {html.escape(data['nationality'])}\n"
         f"Паспорт: {security.mask(data['passport'])} до {fmt_date(date.fromisoformat(data['passport_exp']))}\n"
-        f"Телефон: {html.escape(data['phone'])}\nEmail: {html.escape(data['email'])}\n\n"
-        f"Стоимость сервиса: <b>{price:.0f} €</b> (после брони)\n\n{CONSENT}"
+        + (f"Пол: {'мужской' if data.get('gender') == 'M' else 'женский'}\n" if data.get("gender") else "")
+        + (f"ВНЖ до: {fmt_date(date.fromisoformat(data['residence_exp']))}\n" if data.get("residence_exp")
+           else ("ВНЖ: на продлении (ресипт)\n" if data.get("residence_receipt") else ""))
+        + ("Скан паспорта: получен ✓\n" if data.get("passport_scan") else "")
+        + f"Телефон: {html.escape(data['phone'])}\nEmail: {html.escape(data['email'])}\n\n"
+        + (f"💳 Сбор визового центра: <b>{fee:.2f} €</b> — оплачиваешь сразу после заявки, без него слот не забронировать\n"
+           f"🤝 Наш сервис: <b>{price:.0f} €</b> — после брони\n"
+           f"Итого: <b>{fee + price:.2f} €</b>\n\n" if fee else
+           f"Стоимость сервиса: <b>{price:.0f} €</b> (после брони)\n\n")
+        + CONSENT + (FEE_NOTE if fee else "")
     )
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Отправить заявку", callback_data="ord:confirm")
@@ -395,15 +497,18 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
     await message.answer(text, reply_markup=kb.as_markup())
 
 
-EDIT_LABELS = {"window": "Даты", "full_name": "Имя", "birth": "Дата рождения", "nationality": "Гражданство",
-               "passport": "Номер паспорта", "passport_exp": "Срок паспорта", "phone": "Телефон", "email": "Email"}
+EDIT_LABELS = {"window": "Даты", "full_name": "Имя", "gender": "Пол", "birth": "Дата рождения",
+               "nationality": "Гражданство", "passport": "Номер паспорта", "passport_exp": "Срок паспорта",
+               "passport_scan": "Скан паспорта", "residence_exp": "ВНЖ", "phone": "Телефон", "email": "Email"}
 
 
 @router.callback_query(F.data == "ord:edit", NewOrder.confirm)
-async def order_edit(call: CallbackQuery) -> None:
+async def order_edit(call: CallbackQuery, state: FSMContext) -> None:
     kb = InlineKeyboardBuilder()
+    steps = form_steps((await state.get_data()).get("mission", ""))
     for step, label in EDIT_LABELS.items():
-        kb.button(text=label, callback_data=f"ord:fix:{step}")
+        if step in steps:
+            kb.button(text=label, callback_data=f"ord:fix:{step}")
     kb.adjust(2)
     await call.message.answer("Что исправить?", reply_markup=kb.as_markup())
     await call.answer()
@@ -446,18 +551,26 @@ async def _order_confirm(call: CallbackQuery, state: FSMContext, db: Database, s
         await call.message.edit_text(reason)
         await call.answer()
         return
-    applicant = {k: data[k] for k in ("full_name", "birth", "nationality", "passport", "passport_exp", "phone", "email")}
+    applicant = {k: data.get(k) for k in ("full_name", "gender", "birth", "nationality", "passport", "passport_exp",
+                                          "passport_scan", "residence_exp", "residence_receipt", "phone", "email")}
     d_from = date.fromisoformat(data["date_from"]) if data.get("date_from") else None
     d_to = date.fromisoformat(data["date_to"]) if data.get("date_to") else None
+    fee = await db.fee(data["mission"])
     order_id = await db.create_order(call.from_user.id, data["mission"], d_from, d_to, security.encrypt(applicant),
-                                     destination=data.get("destination"))
+                                     destination=data.get("destination"), fee=fee)
     await db.log_event(call.from_user.id, "order_new", f"#{order_id} {data.get('destination')}")
-    await call.message.edit_text(
-        f"✅ Заявка <b>#{order_id}</b> принята: {html.escape(data['mission_name'])}.\n"
-        "Как только поймаем слот и запишем тебя — пришлю подтверждение и детали. Статус — /myorders")
     await call.answer()
+    if fee > 0:
+        await call.message.edit_text(f"✅ Заявка <b>#{order_id}</b> принята: {html.escape(data['mission_name'])}.")
+        await issue_fee_invoice(call.bot, db, settings, order_id)
+        header = f"💳 Новая заявка — ждём оплату сбора {fee:.2f} €. Бронировать пока рано."
+    else:
+        await call.message.edit_text(
+            f"✅ Заявка <b>#{order_id}</b> принята: {html.escape(data['mission_name'])}.\n"
+            "Как только поймаем слот и запишем тебя — пришлю подтверждение и детали. Статус — /myorders")
+        header = "🆕 Новая заявка"
     for admin_id in settings.admin_ids:
-        await send_admin_card(call.bot, db, admin_id, order_id, settings, header="🆕 Новая заявка")
+        await send_admin_card(call.bot, db, admin_id, order_id, settings, header=header)
 
 
 @router.callback_query(F.data.in_({"ord:confirm", "ord:edit", "ord:any"}) | F.data.startswith("ord:fix:"))
@@ -469,7 +582,9 @@ async def stale_order_button(call: CallbackQuery) -> None:
 async def order_unexpected(message: Message, state: FSMContext) -> None:
     """Sticker, photo, voice... in the middle of the form: ask the same question again."""
     step = (await state.get_state() or "").split(":")[-1]
-    if step in QUESTIONS:
+    if step == "passport_scan":
+        await message.answer("Нужна фотография разворота паспорта 📷", reply_markup=step_kb(step))
+    elif step in QUESTIONS:
         await message.answer("Нужен текстом 🙂\n\n" + QUESTIONS[step], reply_markup=step_kb(step))
 
 
@@ -486,7 +601,9 @@ async def my_orders(message: Message, db: Database, uid: int | None = None) -> N
                      + (f"\n     запись: {html.escape(r['appointment'])}" if r["appointment"] else ""))
         if r["status"] == "booked" and r["invoice_url"]:
             kb.button(text=f"Оплатить #{r['id']} — {r['price_eur']:.0f} €", url=r["invoice_url"])
-        if r["status"] in ("new", "in_progress"):
+        if r["status"] == "awaiting_fee" and r["fee_invoice_url"]:
+            kb.button(text=f"💳 Оплатить сбор #{r['id']} — {r['fee_eur']:.2f} €", url=r["fee_invoice_url"])
+        if r["status"] in ("awaiting_fee", "new", "in_progress"):
             kb.button(text=f"✖️ Отменить #{r['id']}", callback_data=f"myo:cancel:{r['id']}")
     kb.adjust(1)
     await message.answer("\n".join(lines), reply_markup=kb.as_markup())
@@ -499,7 +616,7 @@ async def client_cancel(call: CallbackQuery, db: Database, settings: Settings) -
     if not o or o["tg_id"] != call.from_user.id:
         await call.answer("Нет такой заявки", show_alert=True)
         return
-    if o["status"] not in ("new", "in_progress"):
+    if o["status"] not in ("awaiting_fee", "new", "in_progress"):
         await call.answer("Слот уже забронирован — отменить можно только через /support.", show_alert=True)
         return
     kb = InlineKeyboardBuilder()
@@ -517,15 +634,13 @@ async def client_cancel_confirm(call: CallbackQuery, db: Database, settings: Set
         return
     oid = int(call.data.split(":")[2])
     o = await db.order(oid)
-    if not o or o["tg_id"] != call.from_user.id or o["status"] not in ("new", "in_progress"):
+    if not o or o["tg_id"] != call.from_user.id or o["status"] not in ("awaiting_fee", "new", "in_progress"):
         await call.answer("Уже нельзя отменить — напиши в /support.", show_alert=True)
         return
-    await db.update_order(oid, status="cancelled")
-    await db.log_event(call.from_user.id, "order_cancel_client", f"#{oid}")
-    await call.message.edit_text(f"Заявка #{oid} отменена.")
+    await cancel_order(call.bot, db, settings, o, by_client=True)
+    await call.message.edit_text(f"Заявка #{oid} отменена."
+                                 + (" Сбор вернём в течение пары дней." if o["fee_paid_at"] else ""))
     await call.answer()
-    for a in settings.admin_ids:
-        await notify_client(call.bot, a, f"✖️ Клиент сам отменил заявку #{oid} ({html.escape(order_country(o))}).")
 
 
 # ---------------- admin ----------------
@@ -540,6 +655,8 @@ def order_country(o) -> str:
 def admin_buttons(o) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     oid, st = o["id"], o["status"]
+    if st == "awaiting_fee":
+        kb.button(text="💳 Сбор оплачен вручную", callback_data=f"oa:feepaid:{oid}")
     if st == "new":
         kb.button(text="🔎 Взять в работу", callback_data=f"oa:take:{oid}")
     if st in ("new", "in_progress"):
@@ -549,7 +666,7 @@ def admin_buttons(o) -> InlineKeyboardBuilder:
         kb.button(text="🔁 Новый счёт", callback_data=f"oa:invoice:{oid}")
     if st == "paid":
         kb.button(text="✅ Завершить", callback_data=f"oa:done:{oid}")
-    if st in ("new", "in_progress", "booked"):
+    if st in ("awaiting_fee", "new", "in_progress", "booked"):
         kb.button(text="✖️ Отменить", callback_data=f"oa:cancel:{oid}")
     kb.adjust(2)
     return kb
@@ -575,8 +692,15 @@ def admin_card_text(o, tz: ZoneInfo) -> str:
         f"<code>{html.escape(a.get('full_name', ''))}</code>",
         f"Рождение: {_d(a.get('birth'))} · {html.escape(a.get('nationality', ''))}",
         f"Паспорт: <code>{html.escape(a.get('passport', ''))}</code> до {_d(a.get('passport_exp'))}",
-        f"Тел: <code>{html.escape(a.get('phone', ''))}</code> · <code>{html.escape(a.get('email', ''))}</code>",
+        f"Тел: <code>{html.escape(a.get('phone') or '')}</code> · <code>{html.escape(a.get('email') or '')}</code>",
     ]
+    if a.get("gender"):
+        lines.insert(6, f"Пол: {'M' if a['gender'] == 'M' else 'F'}")
+    if a.get("residence_exp") or a.get("residence_receipt"):
+        lines.append(f"ВНЖ: до {_d(a['residence_exp'])}" if a.get("residence_exp") else "ВНЖ: ⚠️ на продлении (ресипт)")
+    if o["fee_eur"] and float(o["fee_eur"]) > 0:
+        lines.append(f"Сбор: {o['fee_eur']:.2f} € — " + (f"✅ оплачен ({html.escape(o['fee_paid'] or '')})"
+                                                          if o["fee_paid_at"] else "⏳ не оплачен"))
     if o["appointment"]:
         lines.append(f"\nЗапись: <b>{html.escape(o['appointment'])}</b>")
     if o["price_eur"] is not None:
@@ -591,7 +715,11 @@ async def send_admin_card(bot: Bot, db: Database, chat_id: int, order_id: int, s
         return
     text = (header + "\n\n" if header else "") + admin_card_text(o, ZoneInfo(settings.tz))
     try:
-        await bot.send_message(chat_id, text, reply_markup=admin_buttons(o).as_markup())
+        msg = await bot.send_message(chat_id, text, reply_markup=admin_buttons(o).as_markup())
+        scan = security.decrypt(o["applicant"]).get("passport_scan")
+        if scan:
+            await bot.send_document(chat_id, scan, caption=f"Скан паспорта, заявка #{o['id']}",
+                                    reply_to_message_id=msg.message_id)
     except Exception:
         log.exception("admin card to %s failed", chat_id)
 
@@ -636,7 +764,8 @@ async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, sett
         await call.answer("Нет такой заявки", show_alert=True)
         return
     allowed = {"take": ("new",), "book": ("new", "in_progress"), "paid": ("booked",), "invoice": ("booked",),
-               "done": ("paid",), "cancel": ("new", "in_progress", "booked")}
+               "done": ("paid",), "cancel": ("awaiting_fee", "new", "in_progress", "booked"),
+               "feepaid": ("awaiting_fee",)}
     if action in allowed and o["status"] not in allowed[action]:
         await call.answer(f"Нельзя: заявка уже в статусе «{STATUS.get(o['status'], o['status'])}». "
                           "Открой свежую карточку: /orders", show_alert=True)
@@ -667,11 +796,12 @@ async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, sett
     elif action == "done":
         await db.update_order(oid, status="done")
     elif action == "cancel":
-        if o["invoice_id"] and payments.enabled():
-            await payments.delete_invoice(o["invoice_id"])
-        await db.update_order(oid, status="cancelled")
-        await notify_client(call.bot, o["tg_id"], f"✖️ Заявка #{oid} отменена. Вопросы — /support")
-    if action in ("take", "done", "cancel", "paid"):
+        await cancel_order(call.bot, db, settings, o, by_client=False)
+    elif action == "feepaid":
+        if o["fee_invoice_id"] and payments.enabled():
+            await payments.delete_invoice(o["fee_invoice_id"])
+        await fee_received(call.bot, db, settings, oid, "manual", str(o["fee_eur"]))
+    if action in ("take", "done", "cancel", "paid", "feepaid"):
         o = await db.order(oid)
         try:
             await call.message.edit_text(admin_card_text(o, ZoneInfo(settings.tz)),
@@ -767,6 +897,58 @@ async def issue_invoice(bot: Bot, db: Database, settings: Settings, oid: int) ->
             log.warning("cannot send pdf for %s", oid)
 
 
+async def issue_fee_invoice(bot: Bot, db: Database, settings: Settings, oid: int) -> None:
+    o = await db.order(oid)
+    fee = float(o["fee_eur"])
+    text = (f"💳 Заявка #{oid}: чтобы мы могли забронировать слот, оплати <b>сбор визового центра {fee:.2f} €</b>.\n"
+            "Его мы платим при бронировании. Как только оплата пройдёт — начнём искать слот.\n"
+            "Счёт действует 48 часов.")
+    kb = InlineKeyboardBuilder()
+    if payments.enabled():
+        try:
+            invoice_id, url = await payments.create_invoice(oid, fee, f"Visa centre fee, order #{oid}",
+                                                            expires_in=48 * 3600)
+            await db.update_order(oid, fee_invoice_id=invoice_id, fee_invoice_url=url)
+            kb.button(text=f"💳 Оплатить сбор {fee:.2f} €", url=url)
+        except payments.PaymentError as e:
+            log.error("fee invoice failed: %s", e)
+            text = f"Заявка #{oid}: нужно оплатить сбор визового центра {fee:.2f} €. Реквизиты пришлёт поддержка."
+    else:
+        text = f"Заявка #{oid}: нужно оплатить сбор визового центра {fee:.2f} €. Реквизиты пришлёт поддержка."
+    await notify_client(bot, o["tg_id"], text, reply_markup=kb.as_markup() if payments.enabled() else None)
+
+
+async def fee_received(bot: Bot, db: Database, settings: Settings, oid: int, asset: str, amount: str) -> None:
+    o = await db.order(oid)
+    if not o or o["status"] != "awaiting_fee":
+        return
+    await db.update_order(oid, status="new", fee_paid_at=datetime.now(timezone.utc), fee_paid=f"{amount} {asset}")
+    await db.log_event(o["tg_id"], "fee_paid", f"#{oid} {amount} {asset}")
+    await notify_client(bot, o["tg_id"], f"✅ Сбор по заявке #{oid} получен. Ищем слот — напишем, как только запишем тебя.")
+    for a in settings.admin_ids:
+        await send_admin_card(bot, db, a, oid, settings, header=f"✅ Сбор оплачен ({amount} {asset}) — можно бронировать")
+
+
+async def cancel_order(bot: Bot, db: Database, settings: Settings, o, by_client: bool) -> None:
+    oid = o["id"]
+    for inv in (o["invoice_id"], o["fee_invoice_id"]):
+        if inv and payments.enabled():
+            await payments.delete_invoice(inv)
+    await db.update_order(oid, status="cancelled")
+    await db.log_event(o["tg_id"], "order_cancel_client" if by_client else "order_cancel", f"#{oid}")
+    refund = (f"\n💸 Сбор {o['fee_eur']:.2f} € уже был оплачен ({html.escape(o['fee_paid'] or '')}) — "
+              "верни его клиенту: @CryptoBot → Отправить, или чеком.") if o["fee_paid_at"] else ""
+    if by_client:
+        for a in settings.admin_ids:
+            await notify_client(bot, a, f"✖️ Клиент сам отменил заявку #{oid} ({html.escape(order_country(o))}).{refund}")
+    else:
+        await notify_client(bot, o["tg_id"], f"✖️ Заявка #{oid} отменена."
+                            + (" Сбор вернём в течение пары дней." if o["fee_paid_at"] else "") + " Вопросы — /support")
+        if refund:
+            for a in settings.admin_ids:
+                await notify_client(bot, a, f"Заявка #{oid} отменена.{refund}")
+
+
 async def mark_paid(bot: Bot, db: Database, settings: Settings, oid: int, asset: str, amount: str) -> None:
     o = await db.order(oid)
     if not o or o["status"] in ("paid", "done"):
@@ -805,6 +987,20 @@ async def payment_watcher(bot: Bot, db: Database, settings: Settings, every: int
                         for a in settings.admin_ids:
                             await notify_client(bot, a, f"⌛ Счёт по заявке #{r['id']} истёк без оплаты. "
                                                         "Напиши клиенту через бота или выставь новый (🔁 Новый счёт).")
+                fee_rows = await db.awaiting_fee()
+                fee_states = await payments.invoice_statuses([r["fee_invoice_id"] for r in fee_rows])
+                for r in fee_rows:
+                    inv = fee_states.get(int(r["fee_invoice_id"]))
+                    if not inv:
+                        continue
+                    if inv.get("status") == "paid":
+                        await fee_received(bot, db, settings, r["id"], inv.get("paid_asset") or inv.get("asset") or "crypto",
+                                           str(inv.get("paid_amount") or inv.get("amount") or ""))
+                    elif inv.get("status") == "expired":
+                        o = await db.order(r["id"])
+                        await cancel_order(bot, db, settings, o, by_client=False)
+                        await notify_client(bot, r["tg_id"], f"Счёт на сбор по заявке #{r['id']} истёк, заявка закрыта. "
+                                                             "Если ещё нужно — оформи заново: /order")
             if tick % 30 == 1:  # every ~30 min: housekeeping
                 await auto_complete(bot, db, settings)
                 await db.purge_stale_forms(hours=48)
@@ -849,14 +1045,29 @@ async def price_cmd(message: Message, command: CommandObject, db: Database, sett
         await db.set_price(args[0].lower(), float(args[1]))
         await message.answer(f"Цена {args[0].lower()}: {float(args[1]):.0f} €")
         return
-    lines = [f"<b>Цены</b> (по умолчанию {settings.default_price:.0f} €)"]
+    lines = [f"<b>Цены</b> (сервис по умолчанию {settings.default_price:.0f} €)"]
     for r in await db.prices():
-        lines.append(f"<code>{r['code']}</code> {html.escape(r['name'])}: "
-                     + (f"{r['price_eur']:.0f} €" if r["price_eur"] is not None else "по умолчанию"))
-    lines.append("\nИзменить: /price hun 120 · проверить оплату: /testinvoice")
+        fee = await db.fee(r["code"])
+        lines.append(f"<code>{r['code']}</code> {html.escape(r['name'])}: сервис "
+                     + (f"{r['price_eur']:.0f} €" if r["price_eur"] is not None else f"{settings.default_price:.0f} €")
+                     + (f" + сбор {fee:.2f} € при брони" if fee else " · сбора при брони нет"))
+    lines.append("\nИзменить: /price hun 120 · сбор: /fee svk 29 · проверить оплату: /testinvoice")
     payment_state = "подключена" if payments.enabled() else "не подключена (нужен CRYPTO_PAY_TOKEN)"
     lines.append(f"Оплата Crypto Pay: {payment_state}")
     await message.answer("\n".join(lines))
+
+
+@router.message(Command("fee"))
+async def fee_cmd(message: Message, command: CommandObject, db: Database, settings: Settings) -> None:
+    if not is_admin(message.from_user.id, settings):
+        return
+    args = (command.args or "").replace(",", ".").split()
+    if len(args) == 2 and re.fullmatch(r"\d+(\.\d+)?", args[1]):
+        await db.set_fee(args[0].lower(), float(args[1]))
+        await message.answer(f"Сбор при брони {args[0].lower()}: {float(args[1]):.2f} € (0 — сбора нет)")
+    else:
+        await message.answer("Формат: /fee svk 29.00 — сбор визового центра, который платится при бронировании. "
+                             "0 — если сбор платится в центре. Текущие — /price")
 
 
 @router.message(Command("testinvoice"))

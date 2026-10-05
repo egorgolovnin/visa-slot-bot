@@ -34,11 +34,12 @@ async def _call(method: str, **params) -> dict:
     return data["result"]
 
 
-async def create_invoice(order_id: int, amount_eur: float, description: str) -> tuple[int, str]:
+async def create_invoice(order_id: int, amount_eur: float, description: str,
+                         expires_in: int = 7 * 24 * 3600) -> tuple[int, str]:
     result = await _call(
         "createInvoice", currency_type="fiat", fiat="EUR", amount=f"{amount_eur:.2f}",
         accepted_assets=ASSETS, description=description[:1024], payload=f"order:{order_id}",
-        expires_in=7 * 24 * 3600, allow_comments=False, allow_anonymous=False,
+        expires_in=expires_in, allow_comments=False, allow_anonymous=False,
     )
     url = result.get("bot_invoice_url") or result.get("mini_app_invoice_url") or result.get("pay_url")
     return int(result["invoice_id"]), url
