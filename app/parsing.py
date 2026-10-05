@@ -69,3 +69,62 @@ def translit(text: str) -> str:
         "ь": "", "э": "e", "ю": "iu", "я": "ia",
     })
     return text.lower().translate(table).upper()
+
+
+# ---- nationality ----
+RU_COUNTRIES = {
+    "россия": "Russia", "рф": "Russia", "российская федерация": "Russia", "украина": "Ukraine",
+    "беларусь": "Belarus", "белоруссия": "Belarus", "казахстан": "Kazakhstan", "узбекистан": "Uzbekistan",
+    "армения": "Armenia", "грузия": "Georgia", "азербайджан": "Azerbaijan", "кыргызстан": "Kyrgyzstan",
+    "киргизия": "Kyrgyzstan", "таджикистан": "Tajikistan", "туркменистан": "Turkmenistan", "молдова": "Moldova",
+    "индия": "India", "китай": "China", "иран": "Iran", "израиль": "Israel", "турция": "Turkey",
+    "ливан": "Lebanon", "египет": "Egypt", "сирия": "Syria", "пакистан": "Pakistan", "филиппины": "Philippines",
+    "вьетнам": "Vietnam", "шри-ланка": "Sri Lanka", "непал": "Nepal", "бангладеш": "Bangladesh", "иордания": "Jordan",
+    "монголия": "Mongolia", "сербия": "Serbia", "нигерия": "Nigeria", "юар": "South Africa",
+}
+EN_ALIASES = {"rf": "Russia", "russian federation": "Russia", "uk": "United Kingdom", "usa": "United States",
+              "us": "United States", "kyrgyz republic": "Kyrgyzstan", "turkiye": "Turkey", "türkiye": "Turkey"}
+
+
+def _country_names() -> dict[str, str]:
+    import pycountry
+    names: dict[str, str] = {}
+    for c in pycountry.countries:
+        short = getattr(c, "common_name", None) or c.name
+        for n in {c.name, short, getattr(c, "official_name", c.name)}:
+            names[n.lower()] = short
+    # friendlier spellings
+    for k, v in {"russian federation": "Russia", "iran, islamic republic of": "Iran", "viet nam": "Vietnam",
+                 "korea, republic of": "South Korea", "moldova, republic of": "Moldova",
+                 "syrian arab republic": "Syria", "türkiye": "Turkey"}.items():
+        names[k] = v
+    for k, v in list(names.items()):
+        if v in ("Russian Federation",):
+            names[k] = "Russia"
+    for v in set(names.values()):          # the canonical short names themselves: "russia", "vietnam"...
+        names[v.lower()] = v
+    return names
+
+
+_NAMES: dict[str, str] | None = None
+
+
+def normalize_country(text: str) -> tuple[str | None, list[str]]:
+    """(country, suggestions). Exact/alias match -> country; otherwise up to 3 close suggestions."""
+    import difflib
+    global _NAMES
+    if _NAMES is None:
+        _NAMES = _country_names()
+    t = re.sub(r"\s+", " ", text.strip().lower())
+    for table in (RU_COUNTRIES, EN_ALIASES, _NAMES):
+        if t in table:
+            return table[t], []
+    pool = {**_NAMES, **RU_COUNTRIES, **EN_ALIASES}
+    close = difflib.get_close_matches(t, pool.keys(), n=5, cutoff=0.5)
+    seen, out = set(), []
+    for k in close:
+        v = pool[k]
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return None, out[:3]

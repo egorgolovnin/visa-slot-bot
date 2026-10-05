@@ -75,15 +75,12 @@ QUESTIONS = {
                "или одну дату — «с этого дня». Если неважно — напиши <code>любые</code>."),
     "full_name": "Имя и фамилия <b>латиницей, как в загранпаспорте</b>.\nНапример: <code>IVAN IVANOV</code>",
     "birth": "Дата рождения, например <code>15.03.1990</code>",
-    "nationality": "Гражданство, как в паспорте. Например: <code>Russia</code>",
+    "nationality": "Гражданство — выбери кнопкой или напиши, как в паспорте (например <code>Russia</code>):",
     "passport": "Номер загранпаспорта (буквы и цифры):",
     "passport_exp": "До какого числа действует паспорт? Например <code>01.01.2031</code>",
     "phone": "Телефон для связи, например <code>+35799123456</code>",
     "email": "Email — на него придёт подтверждение записи:",
 }
-NAT_ALIASES = {"россия": "Russia", "рф": "Russia", "russia": "Russia", "украина": "Ukraine", "беларусь": "Belarus",
-               "казахстан": "Kazakhstan", "узбекистан": "Uzbekistan", "армения": "Armenia", "грузия": "Georgia",
-               "азербайджан": "Azerbaijan", "кыргызстан": "Kyrgyzstan", "киргизия": "Kyrgyzstan", "индия": "India"}
 NOT_A_COMMAND = ~F.text.startswith("/")
 
 
@@ -107,7 +104,8 @@ async def ask(message: Message, state: FSMContext, step: str, prefix: str = "") 
     if data.get("editing") and step != "window":
         prefix = prefix or "Исправляем. "
     await state.set_state(getattr(NewOrder, step))
-    await message.answer(prefix + QUESTIONS[step], reply_markup=step_kb(step))
+    kb = nationality_kb([]) if step == "nationality" else step_kb(step)
+    await message.answer(prefix + QUESTIONS[step], reply_markup=kb)
 
 
 async def next_step(message: Message, state: FSMContext, current: str, db: Database, settings: Settings) -> None:
@@ -276,22 +274,47 @@ async def order_birth(message: Message, state: FSMContext, db: Database, setting
     await next_step(message, state, "birth", db, settings)
 
 
+COMMON_NATIONALITIES = ["Russia", "Ukraine", "Belarus", "Kazakhstan", "Uzbekistan", "Armenia"]
+
+
+def nationality_kb(suggestions: list[str]):
+    kb = InlineKeyboardBuilder()
+    for name in list(dict.fromkeys(suggestions + COMMON_NATIONALITIES))[:8]:
+        kb.button(text=name, callback_data=f"ord:nat:{name}")
+    kb.button(text="⬅️ Назад", callback_data="ord:back")
+    kb.button(text="✖️ Отмена", callback_data="ord:cancel")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
 @router.message(NewOrder.nationality, F.text, NOT_A_COMMAND)
 async def order_nat(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
-    raw = message.text.strip()
-    if len(raw) < 2 or re.search(r"\d", raw):
-        await message.answer("Напиши страну гражданства словом, например <code>Russia</code>.",
-                             reply_markup=step_kb("nationality"))
+    from .parsing import normalize_country
+    country, suggestions = normalize_country(message.text)
+    if not country:
+        await message.answer("Не нашёл такую страну. Выбери кнопкой или напиши по-английски, как в паспорте "
+                             "(например <code>Russia</code>).", reply_markup=nationality_kb(suggestions[:2]))
         return
-    await state.update_data(nationality=NAT_ALIASES.get(raw.lower(), raw.title())[:40])
+    await state.update_data(nationality=country)
+    await message.answer(f"Гражданство: <b>{html.escape(country)}</b> ✓")
     await next_step(message, state, "nationality", db, settings)
+
+
+@router.callback_query(F.data.startswith("ord:nat:"), NewOrder.nationality)
+async def order_nat_button(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
+    country = call.data.split(":", 2)[2]
+    await state.update_data(nationality=country)
+    await call.answer(country)
+    await call.message.answer(f"Гражданство: <b>{html.escape(country)}</b> ✓")
+    await next_step(call.message, state, "nationality", db, settings)
 
 
 @router.message(NewOrder.passport, F.text, NOT_A_COMMAND)
 async def order_passport(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
     num = re.sub(r"[\s\-№#]", "", message.text.strip().upper())
-    if not re.fullmatch(r"[A-Z0-9]{5,15}", num):
-        await message.answer("Номер паспорта — только латинские буквы и цифры, например <code>751234567</code>.",
+    if not re.fullmatch(r"[A-Z0-9]{6,12}", num) or sum(ch.isdigit() for ch in num) < 5:
+        await message.answer("Это не похоже на номер загранпаспорта: обычно это 6–12 знаков, в основном цифры "
+                             "(например <code>751234567</code> или <code>AB1234567</code>). Проверь по паспорту.",
                              reply_markup=step_kb("passport"))
         return
     await state.update_data(passport=num)
@@ -306,6 +329,10 @@ async def order_pexp(message: Message, state: FSMContext, db: Database, settings
         return
     if d < date.today():
         await message.answer("Паспорт уже истёк — с ним визу не подать. Проверь дату.", reply_markup=step_kb("passport_exp"))
+        return
+    if d > date.today() + timedelta(days=10 * 366 + 30):
+        await message.answer("Загранпаспорт не выдают больше чем на 10 лет — проверь дату окончания срока действия.",
+                             reply_markup=step_kb("passport_exp"))
         return
     if d < date.today() + timedelta(days=180):
         await message.answer("⚠️ Паспорт должен действовать минимум 3 месяца после возвращения из поездки — "
@@ -475,6 +502,13 @@ def admin_buttons(o) -> InlineKeyboardBuilder:
     return kb
 
 
+def _d(iso: str | None) -> str:
+    try:
+        return fmt_date(date.fromisoformat(iso)) if iso else "—"
+    except ValueError:
+        return iso
+
+
 def admin_card_text(o, tz: ZoneInfo) -> str:
     a = security.decrypt(o["applicant"])
     window = f"{fmt_date(o['date_from'])}–{fmt_date(o['date_to'])}" if o["date_from"] else "любые"
@@ -486,8 +520,8 @@ def admin_card_text(o, tz: ZoneInfo) -> str:
         f"Создана: {o['created_at'].astimezone(tz).strftime('%d.%m %H:%M')}",
         "",
         f"<code>{html.escape(a.get('full_name', ''))}</code>",
-        f"Рождение: {a.get('birth', '')} · {html.escape(a.get('nationality', ''))}",
-        f"Паспорт: <code>{html.escape(a.get('passport', ''))}</code> до {a.get('passport_exp', '')}",
+        f"Рождение: {_d(a.get('birth'))} · {html.escape(a.get('nationality', ''))}",
+        f"Паспорт: <code>{html.escape(a.get('passport', ''))}</code> до {_d(a.get('passport_exp'))}",
         f"Тел: <code>{html.escape(a.get('phone', ''))}</code> · <code>{html.escape(a.get('email', ''))}</code>",
     ]
     if o["appointment"]:
