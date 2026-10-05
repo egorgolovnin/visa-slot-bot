@@ -168,6 +168,10 @@ class Poller:
 
             if code in RK_MISSIONS:
                 self.rk_resume_at = None
+                if self.rk.form_report:
+                    report, self.rk.form_report = self.rk.form_report, None
+                    await self.alert_admins("🔍 Германия: впервые увидел форму записи, ничего не отправлял.\n"
+                                            + html.escape(report) + "\n\nПерешли это в чат с разработкой — допишем автобронь.")
             log.info("%s: %d pairs, %d with dates, updated=%s", code, len(slots),
                      sum(1 for x in slots if x.earliest), updated)
             first_sight = not await self.db.was_fetched(code)

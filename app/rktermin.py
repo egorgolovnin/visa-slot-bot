@@ -127,6 +127,8 @@ class RkTerminClient:
         self.last_free_days = 0
         self.last_times: dict[date, list[str]] = {}
         self._day_logged = False
+        self.form_report: str | None = None    # filled once, when the booking form is first seen
+        self._form_probed = False
 
     def page_url(self) -> str:
         cat = f"&categoryId={self.category_id}" if self.category_id else ""
@@ -216,12 +218,38 @@ class RkTerminClient:
             links = re.findall(r"<a[^>]*appointment_showForm[^>]*>(.*?)</a>", page, re.S | re.I)
             source = " ".join(links) if links else re.sub(r"<[^>]+>", " ", page)
             times = sorted({f"{int(h):02d}:{mi}" for h, mi in TIME_RE.findall(source) if 6 <= int(h) <= 19})
+            if not self._form_probed:
+                await self._probe_form(s, page)
             if not self._day_logged:
                 self._day_logged = True
                 log.info("day page sample %s: links=%d times=%s text=%s", d, len(links), times,
                          re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", page))[:800])
             out[d] = times
         return out
+
+    async def _probe_form(self, s: AsyncSession, day_page: str) -> None:
+        """Open (never submit) the booking form behind the first free time and record its fields."""
+        m = re.search(r'href="([^"]*appointment_showForm\.do[^"]*)"', day_page)
+        if not m:
+            return
+        self._form_probed = True
+        try:
+            await asyncio.sleep(random.uniform(1.5, 3))
+            form = await self._get(s, urljoin("https://service2.diplo.de/rktermin/", htmllib.unescape(m.group(1))))
+        except Exception as e:
+            log.warning("form probe failed: %s", e)
+            return
+        fields = []
+        for raw in INPUT_RE.findall(form) + re.findall(r"<(?:select|textarea)([^>]*)>", form, re.I):
+            a = {k.lower(): htmllib.unescape(v) for k, v in ATTR_RE.findall(raw)}
+            if a.get("name") and a.get("type", "text").lower() not in ("hidden", "submit"):
+                fid = a.get("id", "")
+                label = re.search(rf'<label[^>]*for="{re.escape(fid)}"[^>]*>(.*?)</label>', form, re.S) if fid else None
+                text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", label.group(1))).strip() if label else ""
+                fields.append(f"{a['name']} ({a.get('type', 'select/text')}){': ' + text if text else ''}")
+        captcha = "капча есть" if CAPTCHA_RE.search(form) else "капчи нет"
+        self.form_report = (f"Поля формы записи ({captcha}):\n" + "\n".join(f"• {f}" for f in fields)) if fields else None
+        log.info("FORM PROBE: %s | text: %s", fields, re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", form))[:1500])
 
     async def fetch(self) -> tuple[list[Slot], str]:
         try:
