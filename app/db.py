@@ -93,6 +93,13 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS orders_status ON orders (status);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS destination TEXT;
+CREATE TABLE IF NOT EXISTS support_map (
+    admin_chat BIGINT NOT NULL,
+    admin_msg  BIGINT NOT NULL,
+    user_id    BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (admin_chat, admin_msg)
+);
 CREATE TABLE IF NOT EXISTS prices (
     mission   TEXT PRIMARY KEY,
     price_eur NUMERIC(10, 2) NOT NULL
@@ -401,3 +408,17 @@ class Database:
         return await self.pool.fetch(
             """SELECT m.code, m.name, p.price_eur FROM missions m LEFT JOIN prices p ON p.mission = m.code
                WHERE m.offered ORDER BY m.name""")
+
+    # ---- support ----
+    async def map_support(self, admin_chat: int, admin_msg: int, user_id: int) -> None:
+        await self.pool.execute(
+            "INSERT INTO support_map (admin_chat, admin_msg, user_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            admin_chat, admin_msg, user_id)
+
+    async def support_user(self, admin_chat: int, admin_msg: int) -> int | None:
+        return await self.pool.fetchval(
+            "SELECT user_id FROM support_map WHERE admin_chat = $1 AND admin_msg = $2", admin_chat, admin_msg)
+
+    async def support_count(self, days: int) -> int:
+        return await self.pool.fetchval(
+            "SELECT count(*) FROM user_events WHERE kind = 'support' AND at > now() - make_interval(days => $1)", days)

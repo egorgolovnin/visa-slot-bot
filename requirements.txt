@@ -4,3 +4,4 @@ curl_cffi==0.16.3
 ddddocr==1.6.1
 tzdata
 cryptography==46.0.6
+pypdf==5.9.0

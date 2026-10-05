@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 
 from . import config
-from . import orders
+from . import orders, support
 from .bot import TrackingMiddleware, attach_access, router, setup_commands
 from .db import Database
 from .fsm_storage import PgStorage
@@ -46,7 +46,7 @@ async def main() -> None:
     dp = Dispatcher(storage=storage, db=db, settings=settings, poller=poller)
     dp.message.outer_middleware(TrackingMiddleware())
     dp.callback_query.outer_middleware(TrackingMiddleware())
-    for r in (orders.router, router):  # orders first: its state handlers must beat the catch-all
+    for r in (support.router, orders.router, router):  # state handlers first, catch-all last
         attach_access(r)
         dp.include_router(r)
 

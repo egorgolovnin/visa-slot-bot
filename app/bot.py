@@ -21,6 +21,7 @@ router = Router()
 USER_COMMANDS = [
     ("order", "Записаться на визу"),
     ("myorders", "Мои заявки и оплата"),
+    ("support", "Написать в поддержку"),
     ("help", "Как это работает"),
 ]
 ADMIN_COMMANDS = [
@@ -29,6 +30,7 @@ ADMIN_COMMANDS = [
     ("status", "Ближайшие даты сейчас"),
     ("history", "История слотов: /history hun"),
     ("price", "Цены: /price hun 120"),
+    ("testinvoice", "Тестовый счёт на 1 €"),
     ("users", "Пользователи"),
     ("user", "Карточка: /user ID"),
     ("link", "Ссылка с меткой: /link community"),
@@ -296,6 +298,7 @@ async def dashboard_text(db: Database) -> str:
         f"👥 Пользователей: <b>{u['total']}</b> (оставили заявку: {u['with_orders']})",
         f"🆕 Новых: {u['new_1d']} за сутки · {u['new_7d']} за 7 дн · {u['new_30d']} за 30 дн",
         f"🔥 Активных: {u['active_1d']} за сутки · {u['active_7d']} за 7 дн",
+        f"✉️ Обращений в поддержку: {await db.support_count(7)} за 7 дн",
         f"🚫 Забанено: {u['banned']} · заблокировали бота: {u['blocked_bot']}"
         + (f" · ждут доступа: {u['pending']}" if u["pending"] else ""),
         "",
@@ -565,6 +568,7 @@ async def fallback(message: Message) -> None:
         kb = InlineKeyboardBuilder()
         kb.button(text="📝 Записаться на визу", callback_data="go:order")
         kb.button(text="📋 Мои заявки", callback_data="go:myorders")
+        kb.button(text="✉️ Поддержка", callback_data="go:support")
         kb.adjust(1)
         await message.answer("Я помогаю записаться на шенгенскую визу с Кипра. Что сделать?", reply_markup=kb.as_markup())
 
@@ -576,6 +580,9 @@ async def go(call: CallbackQuery, db: Database, poller: Poller, settings: Settin
     if target == "order":
         from .orders import order_start
         await order_start(call.message, state, db, settings, uid=call.from_user.id)
+    elif target == "support":
+        from .support import ask_question
+        await ask_question(call.message, state)
     elif target == "myorders":
         from .orders import my_orders
         await my_orders(call.message, db, uid=call.from_user.id)

@@ -31,7 +31,7 @@ OPEN = ("new", "in_progress", "booked", "paid")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[a-z]{2,}$", re.I)
 DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
 CONSENT = ("Оплата — после того как слот забронирован. Запись делается на твои данные, "
-           "перенести её на другие даты или на другого человека нельзя. Передумал — напиши до брони.")
+           "перенести её на другие даты или на другого человека нельзя. Передумал — напиши в /support до брони.")
 
 
 class NewOrder(StatesGroup):
@@ -566,7 +566,7 @@ async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, sett
         await db.update_order(oid, status="done")
     elif action == "cancel":
         await db.update_order(oid, status="cancelled")
-        await notify_client(call.bot, o["tg_id"], f"✖️ Заявка #{oid} отменена. Вопросы — напиши админу.")
+        await notify_client(call.bot, o["tg_id"], f"✖️ Заявка #{oid} отменена. Вопросы — /support")
     if action in ("take", "done", "cancel", "paid"):
         o = await db.order(oid)
         try:
@@ -594,8 +594,18 @@ async def booking_details(message: Message, state: FSMContext, db: Database, set
     o = await db.order(oid)
     if price is None:
         price = float(o["price_eur"]) if o["price_eur"] is not None else await db.price(o["mission"], settings.default_price)
+    file_id = None
+    if message.document:
+        # strip metadata (author, software, EXIF) and rename before the client ever sees the file
+        from aiogram.types import BufferedInputFile
+        from .sanitize import clean_file
+        raw = await message.bot.download(message.document.file_id)
+        data, name = clean_file(raw.read(), message.document.mime_type, message.document.file_name, f"booking_{oid}")
+        sent = await message.answer_document(BufferedInputFile(data, filename=name),
+                                             caption="🧹 Так файл получит клиент: метаданные очищены, имя нейтральное.")
+        file_id = sent.document.file_id
     await db.update_order(oid, status="booked", appointment=appointment[:200], price_eur=price,
-                          confirmation_file=message.document.file_id if message.document else None)
+                          confirmation_file=file_id)
     await state.clear()
     await db.log_event(o["tg_id"], "order_booked", f"#{oid}")
     await issue_invoice(message.bot, db, settings, oid)
@@ -686,7 +696,26 @@ async def price_cmd(message: Message, command: CommandObject, db: Database, sett
     for r in await db.prices():
         lines.append(f"<code>{r['code']}</code> {html.escape(r['name'])}: "
                      + (f"{r['price_eur']:.0f} €" if r["price_eur"] is not None else "по умолчанию"))
-    lines.append("\nИзменить: /price hun 120")
+    lines.append("\nИзменить: /price hun 120 · проверить оплату: /testinvoice")
     payment_state = "подключена" if payments.enabled() else "не подключена (нужен CRYPTO_PAY_TOKEN)"
     lines.append(f"Оплата Crypto Pay: {payment_state}")
     await message.answer("\n".join(lines))
+
+
+@router.message(Command("testinvoice"))
+async def test_invoice(message: Message, settings: Settings) -> None:
+    """Admin: create a 1 EUR invoice to see exactly what a client sees in CryptoBot."""
+    if not is_admin(message.from_user.id, settings):
+        return
+    if not payments.enabled():
+        await message.answer("CRYPTO_PAY_TOKEN не задан.")
+        return
+    try:
+        _, url = await payments.create_invoice(0, 1.0, "Visa slot service, test")
+    except Exception as e:
+        await message.answer(f"Ошибка Crypto Pay: <code>{html.escape(str(e))[:300]}</code>")
+        return
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Открыть тестовый счёт (1 €)", url=url)
+    await message.answer("Открой и посмотри, что видит клиент: нет ли там твоего имени или username. "
+                         "Платить не обязательно — счёт ни к чему не привязан.", reply_markup=kb.as_markup())
