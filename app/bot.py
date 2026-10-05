@@ -52,6 +52,7 @@ HELP = (
     "4. Присылаем подтверждение — ты оплачиваешь наш сервис в крипте\n\n"
     "💸 Сервис — {price} € + сбор визового центра, если он есть. Ниже, чем у конкурентов: мы не вредители, "
     "а помогаторы. За сервис платишь только когда запись уже есть.\n\n"
+    "📂 Можем собрать документы на визу полностью за тебя — {docs_price} €. Напиши в /support.\n\n"
     "<b>Страны</b>\n"
     "Австрия, Бельгия, Венгрия, Германия, Дания, Исландия, Люксембург, Нидерланды, Норвегия, "
     "Словакия, Финляндия, Хорватия\n\n"
@@ -86,7 +87,8 @@ def price_str(settings: Settings) -> str:
 
 
 def help_text(settings: Settings, admin: bool = False) -> str:
-    return HELP.replace("{price}", price_str(settings)) + (ADMIN_HELP if admin else "")
+    return (HELP.replace("{price}", price_str(settings)).replace("{docs_price}", f"{settings.docs_price:.0f}")
+            + (ADMIN_HELP if admin else ""))
 
 
 async def setup_commands(bot, settings: Settings) -> None:
@@ -144,7 +146,7 @@ class AccessMiddleware(BaseMiddleware):
         if isinstance(event, Message) and (event.text or "").startswith("/start"):
             return await handler(event, data)
         if isinstance(event, Message):
-            await event.answer("Доступ пока не выдан, жду подтверждения админа.")
+            await event.answer("Доступ пока не выдан, ждём подтверждения.")
         elif isinstance(event, CallbackQuery):
             await event.answer("Нет доступа", show_alert=True)
         return None
@@ -208,7 +210,7 @@ async def start(message: Message, command: CommandObject, db: Database, settings
             await setup_commands(message.bot, settings)
         await message.answer(help_text(settings, admin))
     else:
-        await message.answer("Привет! Запрос на доступ отправлен админу.")
+        await message.answer("Привет! Запрос на доступ отправлен, скоро откроем.")
 
 
 @router.message(Command("help"))
@@ -302,7 +304,8 @@ async def dashboard_text(db: Database) -> str:
         f"👥 Пользователей: <b>{u['total']}</b> (оставили заявку: {u['with_orders']})",
         f"🆕 Новых: {u['new_1d']} за сутки · {u['new_7d']} за 7 дн · {u['new_30d']} за 30 дн",
         f"🔥 Активных: {u['active_1d']} за сутки · {u['active_7d']} за 7 дн",
-        f"✉️ Обращений в поддержку: {await db.support_count(7)} за 7 дн",
+        f"✉️ Обращений в поддержку: {await db.support_count(7)} за 7 дн · "
+        f"запросов на сбор документов: {await db.event_total('docs_request', 30)} за 30 дн",
         f"🚫 Забанено: {u['banned']} · заблокировали бота: {u['blocked_bot']}"
         + (f" · ждут доступа: {u['pending']}" if u["pending"] else ""),
         "",
@@ -587,6 +590,7 @@ async def fallback(message: Message) -> None:
         kb = InlineKeyboardBuilder()
         kb.button(text="📝 Записаться на визу", callback_data="go:order")
         kb.button(text="📋 Мои заявки", callback_data="go:myorders")
+        kb.button(text="📂 Собрать документы за меня", callback_data="docs:req")
         kb.button(text="✉️ Поддержка", callback_data="go:support")
         kb.adjust(1)
         await message.answer("Я помогаю записаться на шенгенскую визу с Кипра. Что сделать?", reply_markup=kb.as_markup())

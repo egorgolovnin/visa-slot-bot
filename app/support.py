@@ -33,12 +33,25 @@ def is_admin(uid: int, settings: Settings) -> bool:
     return uid in settings.admin_ids
 
 
-async def ask_question(message: Message, state: FSMContext) -> None:
+async def ask_question(message: Message, state: FSMContext, topic: str | None = None, prompt: str | None = None) -> None:
     await state.set_state(Support.writing)
+    await state.update_data(topic=topic)
     kb = InlineKeyboardBuilder()
     kb.button(text="✖️ Отмена", callback_data="sup:cancel")
-    await message.answer("Напиши вопрос одним сообщением — можно с фото или файлом. Ответим здесь, в боте.",
+    await message.answer(prompt or "Напиши вопрос одним сообщением — можно с фото или файлом. Ответим здесь, в боте.",
                          reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data == "docs:req")
+async def docs_request(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
+    await call.answer()
+    await db.log_event(call.from_user.id, "docs_interest", "")
+    await ask_question(
+        call.message, state, topic=f"📂 Сбор документов под ключ ({settings.docs_price:.0f} €)",
+        prompt=(f"📂 <b>Соберём документы за тебя — {settings.docs_price:.0f} €</b>\n"
+                "Подготовим полный пакет документов под выбранную страну и проверим всё перед подачей.\n\n"
+                "Напиши одним сообщением: страну, даты поездки и цель (туризм, гости, бизнес). "
+                "Менеджер ответит здесь, в боте."))
 
 
 @router.message(Command("support"))
@@ -62,6 +75,7 @@ async def support_cancel(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(Support.writing, NOT_A_COMMAND)
 async def support_message(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    topic = (await state.get_data()).get("topic")
     await state.clear()
     u = message.from_user
     if await db.recent_events(u.id, "support", 60) >= 5:
@@ -70,7 +84,7 @@ async def support_message(message: Message, state: FSMContext, db: Database, set
         return
     orders = await db.orders_list(("new", "in_progress", "booked", "paid", "done"), tg_id=u.id, limit=5)
     order_line = ", ".join(f"#{o['id']} {o['status']}" for o in orders) or "заявок нет"
-    head = (f"✉️ <b>Вопрос в поддержку</b>\nОт: {html.escape(u.full_name)}"
+    head = ((f"<b>{html.escape(topic)}</b>\n" if topic else "✉️ <b>Вопрос в поддержку</b>\n") + f"От: {html.escape(u.full_name)}"
             + (f" @{html.escape(u.username)}" if u.username else "") + f" (<code>{u.id}</code>)\nЗаявки: {order_line}")
     kb = InlineKeyboardBuilder()
     kb.button(text="💬 Ответить", callback_data=f"sup:reply:{u.id}")
@@ -85,7 +99,7 @@ async def support_message(message: Message, state: FSMContext, db: Database, set
             delivered = True
         except Exception:
             log.exception("support to admin %s failed", admin_id)
-    await db.log_event(u.id, "support", (message.text or message.caption or "[media]")[:100])
+    await db.log_event(u.id, "docs_request" if topic else "support", (message.text or message.caption or "[media]")[:100])
     await message.answer("✅ Передали. Ответим здесь, в боте." if delivered
                          else "Не получилось передать вопрос, попробуй ещё раз чуть позже.")
 

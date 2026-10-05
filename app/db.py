@@ -524,3 +524,7 @@ class Database:
         await self.pool.execute(
             "INSERT INTO kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
             key, value)
+
+    async def event_total(self, kind: str, days: int) -> int:
+        return await self.pool.fetchval(
+            "SELECT count(*) FROM user_events WHERE kind = $1 AND at > now() - make_interval(days => $2)", kind, days)

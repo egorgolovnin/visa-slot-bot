@@ -89,7 +89,7 @@ QUESTIONS = {
     "passport_exp": "До какого числа действует паспорт? Например <code>01.01.2031</code>",
     "gender": "Пол (как в паспорте):",
     "passport_scan": ("Пришли <b>фото разворота паспорта с фотографией</b> — его требует визовый центр при записи. "
-                      "Фото должно быть чётким, все поля читаются. Файл видит только администратор."),
+                      "Фото должно быть чётким, все поля читаются. Файл видят только сотрудники сервиса."),
     "residence_exp": ("До какого числа действует твой <b>ВНЖ Кипра</b>? Например <code>15.08.2027</code>\n"
                       "Визу дают только если ВНЖ действует минимум 3 месяца после возвращения из поездки."),
     "phone": "Телефон для связи, например <code>+35799123456</code>",
@@ -175,11 +175,16 @@ async def order_start(message: Message, state: FSMContext, db: Database, setting
     offered = {c for c, _ in await db.offered_missions()}
     taken = set() if is_admin(uid, settings) else await db.open_order_missions(uid)
     kb = InlineKeyboardBuilder()
+    n = 0
     for key, (name, mission, _) in sorted(DESTINATIONS.items(), key=lambda kv: kv[1][0]):
         if mission in offered and mission not in taken:
             kb.button(text=name, callback_data=f"ord:d:{key}")
+            n += 1
+    kb.button(text=f"📂 Собрать документы за меня — {settings.docs_price:.0f} €", callback_data="docs:req")
     kb.button(text="✖️ Отмена", callback_data="ord:cancel")
-    kb.adjust(2)
+    kb.adjust(*([2] * (n // 2)), *([1] if n % 2 else []), 1, 1)  # countries in pairs, then two wide buttons
+    from .documents import PROCESS
+    await message.answer(PROCESS.format(price=f"{settings.default_price:.0f}", docs_price=f"{settings.docs_price:.0f}"))
     await message.answer("<b>Заявка на запись</b>\nВ какую страну едешь (основная страна поездки)?",
                          reply_markup=kb.as_markup())
 
@@ -200,6 +205,14 @@ async def order_destination(call: CallbackQuery, state: FSMContext, db: Database
     await state.update_data(mission=mission, destination=key, mission_name=name, note=note)
     await call.message.edit_text(f"Страна: <b>{name}</b> ({note})")
     await call.answer()
+    from .documents import links_html
+    docs = links_html(mission, key)
+    if docs:
+        dkb = InlineKeyboardBuilder()
+        dkb.button(text=f"📂 Собрать документы за меня — {settings.docs_price:.0f} €", callback_data="docs:req")
+        await call.message.answer(f"📄 <b>Что понадобится на подаче</b> ({name}):\n{docs}\n\n"
+                                  "Документы приносишь в день записи. Ссылки ещё раз пришлём вместе с подтверждением брони.",
+                                  reply_markup=dkb.as_markup(), disable_web_page_preview=True)
     await ask(call.message, state, "window")
 
 
@@ -865,8 +878,11 @@ async def notify_client(bot: Bot, uid: int, text: str, **kw) -> bool:
 async def issue_invoice(bot: Bot, db: Database, settings: Settings, oid: int) -> None:
     o = await db.order(oid)
     name = order_country(o)
+    from .documents import links_html
+    docs = links_html(o["mission"], o["destination"])
     head = (f"✅ <b>Слот забронирован!</b>\nЗаявка #{oid}: {html.escape(name)}\n"
-            f"Запись: <b>{html.escape(o['appointment'] or '')}</b>\n\n")
+            f"Запись: <b>{html.escape(o['appointment'] or '')}</b>\n\n"
+            + (f"📄 Что взять на подачу:\n{docs}\n\n" if docs else ""))
     kb = InlineKeyboardBuilder()
     if payments.enabled():
         if o["invoice_id"]:
@@ -878,11 +894,11 @@ async def issue_invoice(bot: Bot, db: Database, settings: Settings, oid: int) ->
             pay = "Оплати сервис по кнопке ниже (USDT, TON, BTC и др.). Как только оплата пройдёт, бот это увидит."
         except payments.PaymentError as e:
             log.error("invoice failed: %s", e)
-            pay = f"Стоимость: {o['price_eur']:.0f} €. Реквизиты для оплаты пришлёт админ."
+            pay = f"Стоимость: {o['price_eur']:.0f} €. Реквизиты для оплаты пришлёт поддержка."
             for a in settings.admin_ids:
                 await notify_client(bot, a, f"⚠️ Не удалось создать счёт для #{oid}: <code>{html.escape(str(e))}</code>")
     else:
-        pay = f"Стоимость: {o['price_eur']:.0f} €. Реквизиты для оплаты пришлёт админ."
+        pay = f"Стоимость: {o['price_eur']:.0f} €. Реквизиты для оплаты пришлёт поддержка."
     pdf_note = "\n\nPDF подтверждения пришлю сразу после оплаты." if (o["confirmation_file"] and settings.pdf_after_payment) else ""
     reached = await notify_client(bot, o["tg_id"], head + pay + pdf_note,
                                   reply_markup=kb.as_markup() if payments.enabled() else None)
