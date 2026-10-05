@@ -130,12 +130,17 @@ class RkTerminClient:
             log.info("captcha OCR unusable: %r", _solver().classification(raw_img))
             return ""
         action, fields = form
+        if not getattr(self, "_form_logged", False):
+            self._form_logged = True
+            log.info("captcha form action=%r fields=%r", action, {k: v[:40] for k, v in fields.items()})
         for name in list(fields):
             if "captcha" in name.lower() and "text" in name.lower():
                 fields[name] = answer
         if not any("captcha" in n.lower() for n in fields):
             fields["captchaText"] = answer
-        target = action if action.startswith("http") else f"https://service2.diplo.de{action}"
+        # the page's own JS submits to extern/appointment_showMonth.do with the showMonth action
+        fields.setdefault("action:appointment_showMonth", "Continue")
+        target = f"{BASE}/appointment_showMonth.do"
         await asyncio.sleep(random.uniform(1.5, 3))
         r = await s.post(target, data=fields, impersonate="chrome", headers={"referer": url})
         if r.status_code != 200:
