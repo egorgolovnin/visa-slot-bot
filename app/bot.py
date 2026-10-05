@@ -22,7 +22,6 @@ USER_COMMANDS = [
     ("order", "Заявка: забронируем слот за тебя"),
     ("myorders", "Мои заявки и оплата"),
     ("sub", "Выбрать страны для уведомлений"),
-    ("status", "Ближайшие даты сейчас"),
     ("mysubs", "Мои подписки"),
     ("window", "Окно дат: /window hun 01.11.2026-30.11.2026"),
     ("history", "История по стране: /history hun"),
@@ -31,6 +30,7 @@ USER_COMMANDS = [
 ADMIN_COMMANDS = [
     ("admin", "Панель админа"),
     ("orders", "Открытые заявки"),
+    ("status", "Ближайшие даты сейчас"),
     ("price", "Цены: /price hun 120"),
     ("users", "Пользователи"),
     ("user", "Карточка: /user ID"),
@@ -54,7 +54,7 @@ HELP = (
     "<b>Запись под ключ</b>\n"
     "/order — оставь заявку, мы поймаем и забронируем слот на твои данные. Оплата в крипте — только после брони.\n\n"
     "<b>Команды</b>\n" + "\n".join(f"/{c} — {d}" for c, d in USER_COMMANDS) + "\n\n"
-    "Данные VFS могут отставать до часа: увидел алерт — сразу иди записываться."
+    "Записываем мы сами — по твоим данным из заявки. Тебе останется только прийти на подачу."
 )
 ADMIN_HELP = "\n\n<b>Админ</b>\n" + "\n".join(f"/{c} — {d}" for c, d in ADMIN_COMMANDS)
 MAX_LEN = 3800
@@ -228,10 +228,8 @@ async def sub_toggle(call: CallbackQuery, db: Database, poller: Poller, settings
     await call.answer(f"{name}: {'подписка включена' if on else 'подписка выключена'}")
     await db.log_event(call.from_user.id, "sub_on" if on else "sub_off", code)
     if on:
-        rows = [r for r in await db.status() if r["code"] == code]
-        lines = ["✅ Подписка включена. Сейчас:"] + mission_lines(rows, ZoneInfo(settings.tz), poller)
-        lines.append("\nНапишу, как только появится слот или дата станет раньше.")
-        await call.message.answer("\n".join(lines))
+        await call.message.answer(f"✅ {html.escape(name)}: подписка включена. Напишу, как только появится слот.\n"
+                                  "Хочешь, чтобы мы записали тебя сами — оставь заявку: /order")
 
 
 @router.message(Command("mysubs"))
@@ -298,6 +296,9 @@ def mission_lines(rows, tz: ZoneInfo, poller: Poller) -> list[str]:
 
 @router.message(Command("status"))
 async def status(message: Message, db: Database, poller: Poller, settings: Settings) -> None:
+    if not is_admin(message.from_user.id, settings):
+        await message.answer("Такой команды нет. Список команд — /help")
+        return
     rows = await db.status()
     if not rows:
         await message.answer("Данных пока нет.")
@@ -621,7 +622,6 @@ async def fallback(message: Message) -> None:
         kb = InlineKeyboardBuilder()
         kb.button(text="📝 Оставить заявку", callback_data="go:order")
         kb.button(text="🔔 Подписаться на слоты", callback_data="go:sub")
-        kb.button(text="📅 Даты сейчас", callback_data="go:status")
         kb.adjust(1)
         await message.answer("Я бот для записи на шенгенские визы с Кипра. Что сделать?", reply_markup=kb.as_markup())
 
@@ -635,8 +635,6 @@ async def go(call: CallbackQuery, db: Database, poller: Poller, settings: Settin
         await order_start(call.message, state, db, settings, uid=call.from_user.id)
     elif target == "sub":
         await call.message.answer("Выбери страны для уведомлений:", reply_markup=await sub_keyboard(db, call.from_user.id))
-    else:
-        await status(call.message, db, poller, settings)
 
 
 @router.callback_query()
