@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from datetime import date, datetime
 
 import asyncpg
@@ -110,6 +111,10 @@ CREATE TABLE IF NOT EXISTS prices (
 ACTIVE = ("new", "in_progress")
 
 
+def _random_order_no() -> int:
+    return 100000 + secrets.randbelow(900000)
+
+
 class Database:
     def __init__(self, dsn: str):
         self.dsn = dsn
@@ -119,6 +124,7 @@ class Database:
         self.pool = await asyncpg.create_pool(self.dsn, min_size=1, max_size=5)
         async with self.pool.acquire() as c:
             await c.execute(SCHEMA)
+        await self.renumber_sequential_orders()
 
     async def close(self) -> None:
         if self.pool:
@@ -347,9 +353,28 @@ class Database:
     # ---- orders ----
     async def create_order(self, tg_id: int, mission: str, d_from, d_to, applicant: str,
                            destination: str | None = None) -> int:
-        return await self.pool.fetchval(
-            """INSERT INTO orders (tg_id, mission, date_from, date_to, applicant, destination)
-               VALUES ($1, $2, $3, $4, $5, $6) RETURNING id""", tg_id, mission, d_from, d_to, applicant, destination)
+        """Order numbers are random 6-digit values, so nobody can tell how many orders exist."""
+        for _ in range(20):
+            oid = await self.pool.fetchval(
+                """INSERT INTO orders (id, tg_id, mission, date_from, date_to, applicant, destination)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING RETURNING id""",
+                _random_order_no(), tg_id, mission, d_from, d_to, applicant, destination)
+            if oid:
+                return oid
+        raise RuntimeError("could not allocate an order number")
+
+    async def renumber_sequential_orders(self) -> int:
+        """One-off: orders created before random numbering get a random number too."""
+        rows = await self.pool.fetch("SELECT id FROM orders WHERE id < 100000")
+        for r in rows:
+            for _ in range(20):
+                new = _random_order_no()
+                done = await self.pool.fetchval(
+                    """UPDATE orders SET id = $2 WHERE id = $1
+                       AND NOT EXISTS (SELECT 1 FROM orders WHERE id = $2) RETURNING id""", r["id"], new)
+                if done:
+                    break
+        return len(rows)
 
     async def order(self, order_id: int) -> asyncpg.Record | None:
         return await self.pool.fetchrow(
