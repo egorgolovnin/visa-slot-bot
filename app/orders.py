@@ -15,7 +15,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from . import payments, security
+from . import direct_pay, payments, security
 from .config import Settings
 from .db import Database
 from .poller import fmt_date
@@ -910,6 +910,9 @@ async def my_orders(message: Message, db: Database, uid: int | None = None) -> N
             kb.button(text=f"Оплатить #{r['id']} — {r['price_eur']:.0f} €", url=r["invoice_url"])
         if r["status"] == "awaiting_fee" and r["fee_invoice_url"]:
             kb.button(text=f"💳 Оплатить сбор #{r['id']} — {r['fee_eur']:.2f} €", url=r["fee_invoice_url"])
+        if direct_pay.enabled() and r["status"] in ("booked", "awaiting_fee"):
+            kind = "service" if r["status"] == "booked" else "fee"
+            kb.button(text=f"💸 #{r['id']}: USDT с любого кошелька", callback_data=f"dp:{kind}:{r['id']}")
         if r["status"] in ("awaiting_fee", "new", "in_progress"):
             kb.button(text=f"✖️ Отменить #{r['id']}", callback_data=f"myo:cancel:{r['id']}")
         if r["status"] in ("paid", "done"):
@@ -1227,8 +1230,13 @@ async def issue_invoice(bot: Bot, db: Database, settings: Settings, oid: int) ->
     else:
         pay = f"Стоимость: {o['price_eur']:.0f} €. Реквизиты для оплаты пришлёт поддержка."
     pdf_note = "\n\nPDF подтверждения пришлю сразу после оплаты." if (o["confirmation_file"] and settings.pdf_after_payment) else ""
+    if direct_pay.enabled():
+        kb.button(text="💸 USDT с любого кошелька", callback_data=f"dp:service:{oid}")
+        if not payments.enabled():
+            pay = f"Стоимость: {o['price_eur']:.0f} €. Оплати переводом USDT с любого кошелька — кнопка ниже."
+    kb.adjust(1)
     reached = await notify_client(bot, o["tg_id"], head + pay + pdf_note,
-                                  reply_markup=kb.as_markup() if payments.enabled() else None)
+                                  reply_markup=kb.as_markup() if (payments.enabled() or direct_pay.enabled()) else None)
     if not reached:
         for a in settings.admin_ids:
             await notify_client(bot, a, f"⚠️ Клиент заявки #{oid} недоступен (заблокировал бота или удалил чат). "
@@ -1258,7 +1266,10 @@ async def issue_fee_invoice(bot: Bot, db: Database, settings: Settings, oid: int
             text = f"Заявка #{oid}: нужно оплатить сбор визового центра {fee:.2f} €. Реквизиты пришлёт поддержка."
     else:
         text = f"Заявка #{oid}: нужно оплатить сбор визового центра {fee:.2f} €. Реквизиты пришлёт поддержка."
-    await notify_client(bot, o["tg_id"], text, reply_markup=kb.as_markup() if payments.enabled() else None)
+    if direct_pay.enabled():
+        kb.button(text="💸 USDT с любого кошелька", callback_data=f"dp:fee:{oid}")
+    kb.adjust(1)
+    await notify_client(bot, o["tg_id"], text, reply_markup=kb.as_markup() if (payments.enabled() or direct_pay.enabled()) else None)
 
 
 async def fee_received(bot: Bot, db: Database, settings: Settings, oid: int, asset: str, amount: str) -> None:
@@ -1266,6 +1277,9 @@ async def fee_received(bot: Bot, db: Database, settings: Settings, oid: int, ass
     if not o or o["status"] != "awaiting_fee":
         return
     await db.update_order(oid, status="new", fee_paid_at=datetime.now(timezone.utc), fee_paid=f"{amount} {asset}")
+    await db.cancel_direct_for_order(oid)
+    if o["fee_invoice_id"] and payments.enabled() and asset != "crypto" and "TRC20" in asset:
+        await payments.delete_invoice(o["fee_invoice_id"])
     await db.log_event(o["tg_id"], "fee_paid", f"#{oid} {amount} {asset}")
     await notify_client(bot, o["tg_id"], f"✅ Сбор по заявке #{oid} получен. Ищем слот — напишем, как только запишем тебя.")
     for a in settings.admin_ids:
@@ -1278,6 +1292,7 @@ async def cancel_order(bot: Bot, db: Database, settings: Settings, o, by_client:
         if inv and payments.enabled():
             await payments.delete_invoice(inv)
     await db.update_order(oid, status="cancelled")
+    await db.cancel_direct_for_order(oid)
     await db.log_event(o["tg_id"], "order_cancel_client" if by_client else "order_cancel", f"#{oid}")
     refund = (f"\n💸 Сбор {o['fee_eur']:.2f} € уже был оплачен ({html.escape(o['fee_paid'] or '')}) — "
               "верни его клиенту: @CryptoBot → Отправить, или чеком.") if o["fee_paid_at"] else ""
@@ -1297,6 +1312,9 @@ async def mark_paid(bot: Bot, db: Database, settings: Settings, oid: int, asset:
     if not o or o["status"] in ("paid", "done"):
         return
     await db.update_order(oid, status="paid", paid_at=datetime.now(timezone.utc), paid_asset=asset, paid_amount=amount)
+    await db.cancel_direct_for_order(oid)
+    if o["invoice_id"] and payments.enabled() and "TRC20" in asset:
+        await payments.delete_invoice(o["invoice_id"])  # paid directly: the CryptoBot link must die
     await db.log_event(o["tg_id"], "order_paid", f"#{oid} {amount} {asset}")
     await notify_client(bot, o["tg_id"], f"💰 Оплата по заявке #{oid} получена, спасибо!\n"
                                          f"Запись: <b>{html.escape(o['appointment'] or '')}</b>. Удачи на подаче!")
@@ -1344,6 +1362,8 @@ async def payment_watcher(bot: Bot, db: Database, settings: Settings, every: int
                         await cancel_order(bot, db, settings, o, by_client=False)
                         await notify_client(bot, r["tg_id"], f"Счёт на сбор по заявке #{r['id']} истёк, заявка закрыта. "
                                                              "Если ещё нужно — оформи заново: /order")
+            if direct_pay.enabled():
+                await watch_direct_payments(bot, db, settings)
             if tick % 30 == 1:  # every ~30 min: housekeeping
                 await auto_complete(bot, db, settings)
                 await db.purge_stale_forms(hours=48)
@@ -1465,6 +1485,83 @@ async def auto_complete(bot: Bot, db: Database, settings: Settings) -> None:
         if d and d < date.today() - timedelta(days=1):
             await db.update_order(r["id"], status="done")
             log.info("order #%s auto-completed (appointment %s passed)", r["id"], d)
+
+
+# ---------------- direct USDT payments ----------------
+@router.callback_query(F.data.regexp(r"^dp:(service|fee):\d+$"))
+async def direct_pay_start(call: CallbackQuery, db: Database) -> None:
+    _, kind, oid = call.data.split(":")
+    oid = int(oid)
+    o = await db.order(oid)
+    await call.answer()
+    need = "booked" if kind == "service" else "awaiting_fee"
+    if not o or o["tg_id"] != call.from_user.id or o["status"] != need:
+        await call.message.answer("Этот счёт уже неактуален. Статус — /myorders")
+        return
+    p = await db.direct_payment_for(oid, kind)
+    if p and datetime.now(timezone.utc) - p["created_at"] > timedelta(hours=direct_pay.VALID_HOURS):
+        await db.close_direct(p["id"], "expired")
+        p = None
+    if not p:
+        eur = float(o["price_eur"] if kind == "service" else o["fee_eur"])
+        p = await db.add_direct_payment(oid, kind, eur, await direct_pay.unique_amount(db, eur))
+    what = "сервиса" if kind == "service" else "сбора визового центра"
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Я перевёл", callback_data=f"dp:sent:{p['id']}")
+    await call.message.answer(
+        f"💸 <b>Оплата {what} по заявке #{oid}</b> ({p['eur']:.2f} €)\n\n"
+        f"Переведи <b>ровно {p['amount']:.2f} USDT</b>\nСеть: <b>Tron (TRC20)</b>\nАдрес:\n<code>{direct_pay.address()}</code>\n\n"
+        "⚠️ Только USDT и только сеть TRC20 — перевод в другой сети потеряется.\n"
+        "⚠️ Сумма — точно до цента: по ней мы узнаём твой платёж. Если переводишь с биржи, проверь, "
+        "чтобы получатель получил ровно эту сумму (комиссию биржа должна списать сверху).\n\n"
+        f"Бот увидит перевод сам за пару минут. Сумма действует {direct_pay.VALID_HOURS} часов.",
+        reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("dp:sent:"))
+async def direct_pay_sent(call: CallbackQuery, db: Database, settings: Settings) -> None:
+    pid = int(call.data.split(":")[2])
+    row = await db.pool.fetchrow("SELECT * FROM direct_payments WHERE id = $1", pid)
+    await call.answer()
+    if not row:
+        return
+    o = await db.order(row["order_id"])
+    if not o or o["tg_id"] != call.from_user.id:
+        return
+    if row["status"] == "paid":
+        await call.message.answer("Платёж уже получен, спасибо! 🙌")
+        return
+    await call.message.answer("Принято! Как только перевод подтвердится в сети (обычно 1–3 минуты), пришлём подтверждение.")
+    for a in settings.admin_ids:
+        await notify_client(call.bot, a, f"💸 Клиент сообщил о переводе {row['amount']:.2f} USDT (TRC20) по заявке "
+                                         f"#{row['order_id']} ({row['kind']}). Если бот не подтвердит сам за 10 минут — "
+                                         f"проверь адрес на tronscan.org и нажми «Оплачено вручную».")
+
+
+async def watch_direct_payments(bot: Bot, db: Database, settings: Settings) -> None:
+    pending = await db.pending_direct()
+    if not pending:
+        return
+    now = datetime.now(timezone.utc)
+    for p in pending:
+        if now - p["created_at"] > timedelta(hours=direct_pay.VALID_HOURS + 6):
+            await db.close_direct(p["id"], "expired")
+    pending = [p for p in pending if now - p["created_at"] <= timedelta(hours=direct_pay.VALID_HOURS + 6)]
+    if not pending:
+        return
+    since = min(p["created_at"] for p in pending) - timedelta(minutes=5)
+    transfers = await direct_pay.incoming_transfers(since)
+    for p, t in direct_pay.match(pending, transfers, await db.used_direct_tx()):
+        await db.close_direct(p["id"], "paid", t["tx"])
+        asset, amount = "USDT TRC20 (прямой перевод)", f"{t['amount']:.2f}"
+        if p["kind"] == "service":
+            await mark_paid(bot, db, settings, p["order_id"], asset, amount)
+        else:
+            await fee_received(bot, db, settings, p["order_id"], asset, amount)
+        for a in settings.admin_ids:
+            await notify_client(bot, a, f"🔗 Перевод по заявке #{p['order_id']}: "
+                                        f"<a href=\"https://tronscan.org/#/transaction/{t['tx']}\">tronscan</a>",
+                                disable_web_page_preview=True)
 
 
 # ---------------- prices ----------------

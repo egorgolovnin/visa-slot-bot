@@ -150,6 +150,17 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS fee_reminded BOOLEAN NOT NULL DEFAUL
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS appt_reminded BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS window_asked BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS data_purged BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE TABLE IF NOT EXISTS direct_payments (
+    id         BIGSERIAL PRIMARY KEY,
+    order_id   BIGINT NOT NULL,
+    kind       TEXT NOT NULL,              -- service / fee
+    eur        NUMERIC(10, 2) NOT NULL,
+    amount     NUMERIC(12, 2) NOT NULL,    -- USDT, unique to the cent
+    status     TEXT NOT NULL DEFAULT 'pending',   -- pending / paid / expired / cancelled
+    tx         TEXT UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    paid_at    TIMESTAMPTZ
+);
 CREATE TABLE IF NOT EXISTS prices (
     mission   TEXT PRIMARY KEY,
     price_eur NUMERIC(10, 2) NOT NULL
@@ -612,3 +623,34 @@ class Database:
                WHERE NOT data_purged AND status IN ('done', 'cancelled')
                  AND updated_at < now() - make_interval(days => $1)""", days)
         return int(res.split()[-1])
+
+    # ---- direct USDT payments ----
+    async def pending_direct_amounts(self) -> list:
+        rows = await self.pool.fetch("SELECT amount FROM direct_payments WHERE status = 'pending'")
+        return [r["amount"] for r in rows]
+
+    async def direct_payment_for(self, order_id: int, kind: str):
+        return await self.pool.fetchrow(
+            """SELECT * FROM direct_payments WHERE order_id = $1 AND kind = $2 AND status = 'pending'
+               ORDER BY created_at DESC LIMIT 1""", order_id, kind)
+
+    async def add_direct_payment(self, order_id: int, kind: str, eur: float, amount: float):
+        return await self.pool.fetchrow(
+            "INSERT INTO direct_payments (order_id, kind, eur, amount) VALUES ($1, $2, $3, $4) RETURNING *",
+            order_id, kind, eur, amount)
+
+    async def pending_direct(self) -> list:
+        return await self.pool.fetch("SELECT * FROM direct_payments WHERE status = 'pending' ORDER BY created_at")
+
+    async def used_direct_tx(self) -> set:
+        rows = await self.pool.fetch("SELECT tx FROM direct_payments WHERE tx IS NOT NULL")
+        return {r["tx"] for r in rows}
+
+    async def close_direct(self, pid: int, status: str, tx: str | None = None) -> None:
+        await self.pool.execute(
+            "UPDATE direct_payments SET status = $2, tx = COALESCE($3, tx), paid_at = CASE WHEN $2 = 'paid' THEN now() END WHERE id = $1",
+            pid, status, tx)
+
+    async def cancel_direct_for_order(self, order_id: int) -> None:
+        await self.pool.execute(
+            "UPDATE direct_payments SET status = 'cancelled' WHERE order_id = $1 AND status = 'pending'", order_id)

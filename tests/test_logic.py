@@ -83,3 +83,25 @@ def test_supersaas_parsing():
     page = "<table><tr><td>Mon 12 Oct 2099 09:00</td></tr><tr><td>Oct 3, 2099</td></tr><tr><td>1 Jan 2000</td></tr></table>"
     assert parse_free_dates(page) == [d(2099, 10, 3), d(2099, 10, 12)]
     assert no_free_slots("<p>No available space found</p>")
+
+
+def test_direct_pay_parse_and_match():
+    from datetime import datetime, timedelta, timezone
+    from app import direct_pay
+    addr = "TX2kGRwhdDhWj69BYwzZtej7zsFyzq3wZU"
+    now = datetime.now(timezone.utc)
+    data = {"data": [
+        {"transaction_id": "aa", "block_timestamp": int(now.timestamp() * 1000), "to": addr, "value": "57930000",
+         "token_info": {"symbol": "USDT", "address": direct_pay.USDT_TRC20, "decimals": 6}},
+        {"transaction_id": "bb", "block_timestamp": int(now.timestamp() * 1000), "to": "Tother", "value": "57930000",
+         "token_info": {"symbol": "USDT", "address": direct_pay.USDT_TRC20, "decimals": 6}},
+        {"transaction_id": "cc", "block_timestamp": int(now.timestamp() * 1000), "to": addr, "value": "57930000",
+         "token_info": {"symbol": "FAKE", "address": "Tfake", "decimals": 6}},
+    ]}
+    t = direct_pay.parse_transfers(data, addr)
+    assert [x["tx"] for x in t] == ["aa"] and t[0]["amount"] == 57.93
+    pending = [{"id": 1, "amount": 57.93, "created_at": now - timedelta(minutes=1)},
+               {"id": 2, "amount": 57.94, "created_at": now - timedelta(minutes=1)}]
+    pairs = direct_pay.match(pending, t, set())
+    assert [(p["id"], tr["tx"]) for p, tr in pairs] == [(1, "aa")]
+    assert direct_pay.match(pending, t, {"aa"}) == []
