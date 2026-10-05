@@ -25,7 +25,6 @@ USER_COMMANDS = [
     ("mysubs", "Мои подписки"),
     ("window", "Окно дат: /window hun 01.11.2026-30.11.2026"),
     ("history", "История по стране: /history hun"),
-    ("stats", "В какие часы появлялись слоты"),
     ("help", "Что умеет бот"),
 ]
 ADMIN_COMMANDS = [
@@ -316,21 +315,6 @@ async def history(message: Message, command: CommandObject, db: Database, settin
         when = r["at"].astimezone(tz).strftime("%d.%m %H:%M")
         lines.append(f"{when} {labels.get(r['kind'], r['kind'])} {fmt_date(r['old_date'])} → "
                      f"{fmt_date(r['new_date'])} · {html.escape(r['category'])}")
-    await send_long(message, lines)
-
-
-@router.message(Command("stats"))
-async def stats(message: Message, db: Database, settings: Settings) -> None:
-    rows = await db.stats(14, settings.tz)
-    if not rows:
-        await message.answer("За 14 дней слоты не появлялись (или бот работает меньше суток).")
-        return
-    by_mission: dict[str, list[str]] = {}
-    for r in rows:
-        by_mission.setdefault(r["mission"], []).append(f"{r['hour']:02d}:00 ×{r['n']}")
-    lines = ["<b>Когда появлялись слоты, 14 дней</b> (время Кипра)"]
-    for code, hours in by_mission.items():
-        lines.append(f"{code}: " + ", ".join(hours[:5]))
     await send_long(message, lines)
 
 

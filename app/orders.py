@@ -62,12 +62,30 @@ def parse_d(text: str) -> date | None:
 
 
 # ---------------- client: new order ----------------
+async def order_block_reason(db: Database, settings: Settings, uid: int, code: str | None = None) -> str | None:
+    """Why this person cannot open an order (for this country), or None if they can."""
+    if is_admin(uid, settings):
+        return None
+    taken = await db.open_order_missions(uid)
+    if code and code in taken:
+        return "По этой стране у тебя уже есть активная заявка. Статус — /myorders"
+    if len(taken) >= settings.max_order_countries and code not in taken:
+        return (f"Можно вести заявки максимум по {settings.max_order_countries} странам одновременно. "
+                "Новая станет доступна, когда одна из текущих завершится или будет отменена. Статус — /myorders")
+    return None
+
+
 @router.message(Command("order"))
-async def order_start(message: Message, state: FSMContext, db: Database) -> None:
+async def order_start(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
     if not security.enabled():
         await message.answer("Заявки временно недоступны.")
         return
-    missions = await db.offered_missions()
+    reason = await order_block_reason(db, settings, message.from_user.id)
+    if reason:
+        await message.answer(reason)
+        return
+    taken = set() if is_admin(message.from_user.id, settings) else await db.open_order_missions(message.from_user.id)
+    missions = [(c, n) for c, n in await db.offered_missions() if c not in taken]
     kb = InlineKeyboardBuilder()
     for code, name in missions:
         kb.button(text=name, callback_data=f"ord:m:{code}")
@@ -78,8 +96,13 @@ async def order_start(message: Message, state: FSMContext, db: Database) -> None
 
 
 @router.callback_query(F.data.startswith("ord:m:"))
-async def order_mission(call: CallbackQuery, state: FSMContext, db: Database) -> None:
+async def order_mission(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
     code = call.data.split(":")[2]
+    reason = await order_block_reason(db, settings, call.from_user.id, code)
+    if reason:
+        await call.message.edit_text(reason)
+        await call.answer()
+        return
     name = await db.mission_name(code) or code
     await state.update_data(mission=code, mission_name=name)
     await state.set_state(NewOrder.window)
@@ -217,6 +240,11 @@ async def order_email(message: Message, state: FSMContext, db: Database, setting
 async def order_confirm(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
     data = await state.get_data()
     await state.clear()
+    reason = await order_block_reason(db, settings, call.from_user.id, data["mission"])
+    if reason:  # e.g. two forms filled in parallel
+        await call.message.edit_text(reason)
+        await call.answer()
+        return
     applicant = {k: data[k] for k in ("full_name", "birth", "nationality", "passport", "passport_exp", "phone", "email")}
     d_from = date.fromisoformat(data["date_from"]) if data.get("date_from") else None
     d_to = date.fromisoformat(data["date_to"]) if data.get("date_to") else None

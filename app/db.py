@@ -355,6 +355,12 @@ class Database:
                WHERE o.status = ANY($1::text[]) AND ($2::bigint IS NULL OR o.tg_id = $2)
                ORDER BY o.created_at DESC LIMIT $3""", list(statuses), tg_id, limit)
 
+    async def open_order_missions(self, tg_id: int) -> set[str]:
+        rows = await self.pool.fetch(
+            """SELECT DISTINCT mission FROM orders WHERE tg_id = $1
+               AND status IN ('new', 'in_progress', 'booked', 'paid')""", tg_id)
+        return {r["mission"] for r in rows}
+
     async def active_orders_for(self, mission: str) -> list:
         return await self.pool.fetch(
             """SELECT id, date_from, date_to FROM orders
