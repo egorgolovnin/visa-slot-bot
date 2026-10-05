@@ -50,3 +50,9 @@ async def paid_invoices(invoice_ids: list[int]) -> dict[int, dict]:
     result = await _call("getInvoices", invoice_ids=",".join(map(str, invoice_ids)), status="paid")
     items = result.get("items", result) if isinstance(result, dict) else result
     return {int(i["invoice_id"]): i for i in items if i.get("status") == "paid"}
+
+
+async def check() -> str:
+    """Startup self-test: returns the app name Crypto Pay knows this token by."""
+    me = await _call("getMe")
+    return f"{me.get('name')} (app_id {me.get('app_id')})"
