@@ -808,8 +808,25 @@ async def payment_watcher(bot: Bot, db: Database, settings: Settings, every: int
             if tick % 30 == 1:  # every ~30 min: housekeeping
                 await auto_complete(bot, db, settings)
                 await db.purge_stale_forms(hours=48)
+            await weekly_slots_report(bot, db, settings)
         except Exception:
             log.exception("payment watcher")
+
+
+async def weekly_slots_report(bot: Bot, db: Database, settings: Settings) -> None:
+    """Every Monday from 10:00 (Cyprus time) admins get last week's slot statistics, once."""
+    now = datetime.now(ZoneInfo(settings.tz))
+    if now.weekday() != 0 or now.hour < 10:
+        return
+    week = now.strftime("%G-W%V")
+    if await db.kv_get("weekly_slots_report") == week:
+        return
+    await db.kv_set("weekly_slots_report", week)
+    from .slotstats import report
+    text = report(await db.observations(7), 7, settings.tz, await db.first_observation())
+    for a in settings.admin_ids:
+        for chunk in [text[i:i + 3800] for i in range(0, len(text), 3800)]:
+            await notify_client(bot, a, chunk)
 
 
 async def auto_complete(bot: Bot, db: Database, settings: Settings) -> None:

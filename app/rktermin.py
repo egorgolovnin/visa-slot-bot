@@ -120,6 +120,7 @@ class RkTerminClient:
     def __init__(self, proxy_url: str | None):
         self.proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
         self.category_id: str | None = os.getenv("RK_CATEGORY_ID") or "1955"
+        self.last_free_days = 0
 
     def page_url(self) -> str:
         cat = f"&categoryId={self.category_id}" if self.category_id else ""
@@ -226,6 +227,7 @@ class RkTerminClient:
             if not days and NO_SLOTS not in page:
                 log.info("rktermin page without days: %s", re.sub(r"\s+", " ", page)[:1200])
             earliest = days[0] if days else None
+            self.last_free_days = len(days)
             slot = Slot("deu", CENTRE, CATEGORY, earliest, earliest.isoformat() if earliest else "")
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
             log.info("rktermin: %d free days, earliest=%s, months checked=%d", len(days), earliest, seen_months)

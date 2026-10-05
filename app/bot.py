@@ -29,6 +29,7 @@ ADMIN_COMMANDS = [
     ("orders", "Открытые заявки"),
     ("status", "Ближайшие даты сейчас"),
     ("history", "История слотов: /history hun"),
+    ("slots", "Статистика слотов: /slots 30"),
     ("price", "Цены: /price hun 120"),
     ("testinvoice", "Тестовый счёт на 1 €"),
     ("users", "Пользователи"),
@@ -285,6 +286,7 @@ def admin_keyboard():
     kb.button(text="🩺 Проверки", callback_data="adm:health")
     kb.button(text="📈 По дням", callback_data="adm:days")
     kb.button(text="📋 Заявки", callback_data="adm:orders")
+    kb.button(text="📊 Слоты", callback_data="adm:slots")
     kb.adjust(2)
     return kb.as_markup()
 
@@ -386,6 +388,9 @@ async def admin_cb(call: CallbackQuery, db: Database, settings: Settings, poller
         text, kb = await dashboard_text(db), admin_keyboard()
     elif parts[1] == "users":
         text, kb = await users_text(db, int(parts[2]), tz)
+    elif parts[1] == "slots":
+        from .slotstats import report
+        text, kb = report(await db.observations(30), 30, settings.tz, await db.first_observation()), back.as_markup()
     elif parts[1] == "orders":
         from .orders import OPEN, STATUS
         rows = await db.orders_list(OPEN, limit=40)
@@ -411,6 +416,16 @@ async def admin_cb(call: CallbackQuery, db: Database, settings: Settings, poller
     except Exception:
         pass  # message not modified
     await call.answer()
+
+
+@router.message(Command("slots"))
+async def slots_cmd(message: Message, command: CommandObject, db: Database, settings: Settings) -> None:
+    if not await admin_only(message, settings):
+        return
+    from .slotstats import report
+    arg = (command.args or "").strip()
+    days = int(arg) if arg.isdigit() and 1 <= int(arg) <= 365 else 30
+    await send_long(message, report(await db.observations(days), days, settings.tz, await db.first_observation()).split("\n"))
 
 
 @router.message(Command("users"))

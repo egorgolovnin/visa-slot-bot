@@ -21,6 +21,7 @@ log = logging.getLogger("poller")
 Notify = Callable[[int, str], Awaitable[bool]]
 
 FAIL_ALERT_AFTER = 3          # failed checks in a row before admins hear about one country
+TRANSIENT_ALERT_AFTER = 6     # VFS's empty/1019/1020 answers come and go: wait ~1 hour before alerting
 MAX_BACKOFF = 6               # max multiplier of the VFS poll interval after 429s
 RK_COOLDOWN = 1800            # seconds to leave RK-Termin alone after a failed check
 REALERT_AFTER = 1800          # same slot flapping open/closed: alert again only after this
@@ -151,8 +152,11 @@ class Poller:
                 vfs_paused = True
                 await self._failed(code, name, f"429: {e}")
                 continue
-            except (Blocked, NotOffered) as e:
-                # NotOffered mid-cycle is usually VFS's transient 1019/1020: never disable a country here
+            except NotOffered as e:
+                # mid-cycle this is VFS's transient empty/1019/1020 answer: never disable a country here
+                await self._failed(code, name, str(e), threshold=TRANSIENT_ALERT_AFTER)
+                continue
+            except Blocked as e:
                 if code in RK_MISSIONS:
                     self.rk_resume_at = now + timedelta(seconds=RK_COOLDOWN)
                 await self._failed(code, name, str(e))
@@ -169,6 +173,9 @@ class Poller:
             first_sight = not await self.db.was_fetched(code)
             changes = diff(await self.db.current(code), slots)
             await self.db.save_fetch(code, slots, changes, updated)
+            dated = [x.earliest for x in slots if x.earliest]
+            n_dates = self.rk.last_free_days if code in RK_MISSIONS else len(dated)
+            await self.db.add_observation(code, bool(dated), min(dated) if dated else None, n_dates)
             if not first_sight:
                 await self._announce(code, name, changes, updated)
             await self._recovered(code, name)
@@ -179,13 +186,13 @@ class Poller:
             self.health.backoff = 1
         self.health.last_cycle_at = datetime.now(timezone.utc)
 
-    async def _failed(self, code: str, name: str, error: str) -> None:
+    async def _failed(self, code: str, name: str, error: str, threshold: int = FAIL_ALERT_AFTER) -> None:
         h = self.health
         h.fails[code] = h.fails.get(code, 0) + 1
         h.last_error = f"{code}: {error}"[:500]
         log.warning("check failed %s (%d in a row): %s", code, h.fails[code], error[:200])
         await self.db.mission_error(code, error[:300])
-        if h.fails[code] >= FAIL_ALERT_AFTER and code not in h.alerted:
+        if h.fails[code] >= threshold and code not in h.alerted:
             h.alerted.add(code)
             hint = "\nЕсли везде 403 — нужен резидентный прокси (PROXY_URL)." if "403" in error else ""
             await self.alert_admins(f"⚠️ {html.escape(name)}: {h.fails[code]} проверки подряд с ошибкой.\n"

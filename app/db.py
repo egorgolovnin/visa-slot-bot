@@ -102,6 +102,19 @@ CREATE TABLE IF NOT EXISTS support_map (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (admin_chat, admin_msg)
 );
+CREATE TABLE IF NOT EXISTS observations (
+    id        BIGSERIAL PRIMARY KEY,
+    mission   TEXT NOT NULL,
+    at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    available BOOLEAN NOT NULL,
+    earliest  DATE,
+    n_dates   INT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS observations_mission_at ON observations (mission, at);
+CREATE TABLE IF NOT EXISTS kv (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 CREATE TABLE IF NOT EXISTS prices (
     mission   TEXT PRIMARY KEY,
     price_eur NUMERIC(10, 2) NOT NULL
@@ -459,3 +472,26 @@ class Database:
         return await self.pool.fetchval(
             """SELECT count(*) FROM user_events WHERE tg_id = $1 AND kind = $2
                AND at > now() - make_interval(mins => $3)""", tg_id, kind, minutes)
+
+    # ---- slot statistics ----
+    async def add_observation(self, mission: str, available: bool, earliest: date | None, n_dates: int) -> None:
+        await self.pool.execute(
+            "INSERT INTO observations (mission, available, earliest, n_dates) VALUES ($1, $2, $3, $4)",
+            mission, available, earliest, n_dates)
+
+    async def observations(self, days: int) -> list[asyncpg.Record]:
+        return await self.pool.fetch(
+            """SELECT o.mission, m.name, o.at, o.available, o.earliest, o.n_dates
+               FROM observations o LEFT JOIN missions m ON m.code = o.mission
+               WHERE o.at > now() - make_interval(days => $1) ORDER BY o.mission, o.at""", days)
+
+    async def first_observation(self) -> datetime | None:
+        return await self.pool.fetchval("SELECT min(at) FROM observations")
+
+    async def kv_get(self, key: str) -> str | None:
+        return await self.pool.fetchval("SELECT value FROM kv WHERE key = $1", key)
+
+    async def kv_set(self, key: str, value: str) -> None:
+        await self.pool.execute(
+            "INSERT INTO kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            key, value)
