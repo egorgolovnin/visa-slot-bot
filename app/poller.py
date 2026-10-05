@@ -248,9 +248,22 @@ class Poller:
     def wake(self) -> None:
         self._wake.set()
 
+    async def probe_vfs_fields(self) -> None:
+        """Once per deployment version: record the VFS booking-form configuration for each country."""
+        from .vfs_fields import probe, summarize
+        if await self.db.kv_get("vfs_fields_probe") == "v1":
+            return
+        await self.db.kv_set("vfs_fields_probe", "v1")
+        data = await probe(self.s.country, ["hun", "aut", "svk", "fin", "hrv"], self.s.proxy_url)
+        await self.alert_admins(summarize(data)[:3800])
+
     async def run(self) -> None:
         log.info("poller started, proxy=%s", bool(self.s.proxy_url))
         await self.register_static()
+        try:
+            await self.probe_vfs_fields()
+        except Exception:
+            log.exception("vfs fields probe")
         last_discover = await self.db.last_discovery()
         if last_discover is None:
             await self.alert_admins("🔎 Первая разведка завершена.\n" + await self.discover())
