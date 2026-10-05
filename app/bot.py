@@ -65,7 +65,22 @@ def is_admin(uid: int, settings: Settings) -> bool:
     return uid in settings.admin_ids
 
 
+DESCRIPTION = (
+    "Помогаю получить запись на шенгенскую визу с Кипра.\n\n"
+    "🔔 Слежу за свободными датами в 12 странах: Австрия, Венгрия, Словакия, Финляндия, Хорватия, "
+    "Германия, Нидерланды, Бельгия, Дания, Норвегия, Исландия, Люксембург — и пишу, как только появится слот.\n\n"
+    "📝 Могу забронировать запись за тебя. Оплата — только после брони.\n\n"
+    "Нажми «Старт», чтобы начать."
+)
+SHORT_DESCRIPTION = "Слоты на шенгенские визы с Кипра: уведомления о свободных датах и запись под ключ."
+
+
 async def setup_commands(bot, settings: Settings) -> None:
+    try:
+        await bot.set_my_description(DESCRIPTION)
+        await bot.set_my_short_description(SHORT_DESCRIPTION)
+    except Exception:
+        pass  # rate-limited by Telegram if called too often; not critical
     user = [BotCommand(command=c, description=d) for c, d in USER_COMMANDS]
     await bot.set_my_commands(user, scope=BotCommandScopeDefault())
     admin = user + [BotCommand(command=c, description=d) for c, d in ADMIN_COMMANDS]
