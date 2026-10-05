@@ -5,7 +5,7 @@ import html
 import logging
 import random
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
 from .config import Settings
@@ -20,6 +20,8 @@ Notify = Callable[[int, str], Awaitable[None]]
 
 BLIND_AFTER = 3          # failed cycles in a row before the admins hear "bot is blind"
 MAX_BACKOFF = 6          # max multiplier of the poll interval after 429s
+
+RK_COOLDOWN = 1800       # seconds to leave RK-Termin alone after a failed check
 
 # missions served by non-VFS systems: code -> display name
 RK_MISSIONS = {"deu": "Германия (+NL, BE, DK, NO, IS, LU)"}
@@ -48,6 +50,7 @@ class Poller:
         self.notify = notify
         self.client = VfsPublicClient(settings.country, settings.proxy_url)
         self.rk = RkTerminClient(settings.proxy_url)
+        self.rk_resume_at: datetime | None = None
         self.health = Health()
         self._wake = asyncio.Event()
 
@@ -105,7 +108,10 @@ class Poller:
     async def cycle(self) -> None:
         missions = await self.db.offered_missions()
         ok, errors = 0, []
+        now = datetime.now(timezone.utc)
         for code, name in missions:
+            if code in RK_MISSIONS and self.rk_resume_at and now < self.rk_resume_at:
+                continue
             try:
                 slots, vfs_updated = await self.fetch(code)
             except NotOffered:
@@ -119,7 +125,15 @@ class Poller:
             except Blocked as e:
                 errors.append(f"{code}: {e}")
                 log.warning("blocked on %s: %s", code, e)
+                if code in RK_MISSIONS:
+                    self.rk_resume_at = now + timedelta(seconds=RK_COOLDOWN)
                 continue
+            except Exception as e:  # one country must never break the whole cycle
+                errors.append(f"{code}: {type(e).__name__}")
+                log.exception("unexpected error on %s", code)
+                continue
+            if code in RK_MISSIONS:
+                self.rk_resume_at = None
             ok += 1
             log.info("%s: %d pairs, %d with dates, vfs_updated=%s", code, len(slots),
                      sum(1 for x in slots if x.earliest), vfs_updated)

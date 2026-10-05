@@ -26,7 +26,7 @@ LOCATION, REALM = "niko", "926"
 CENTRE = "Посольство Германии, Никосия"
 CATEGORY = "Шенген до 90 дней (DE, NL, BE, DK, NO, IS, LU)"
 NO_SLOTS = "no appointments available"
-MAX_CAPTCHA_TRIES = 8
+MAX_CAPTCHA_TRIES = 4
 MONTHS_AHEAD = 3
 
 CAPTCHA_RE = re.compile(r"url\(['\"]?data:image/[a-z]+;base64,([A-Za-z0-9+/=\s]+)", re.I)
@@ -89,7 +89,7 @@ def parse_days(page: str) -> list[date]:
 class RkTerminClient:
     def __init__(self, proxy_url: str | None):
         self.proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
-        self.category_id: str | None = os.getenv("RK_CATEGORY_ID") or None
+        self.category_id: str | None = os.getenv("RK_CATEGORY_ID") or "1955"
 
     def page_url(self) -> str:
         cat = f"&categoryId={self.category_id}" if self.category_id else ""
@@ -156,6 +156,14 @@ class RkTerminClient:
         return text
 
     async def fetch(self) -> tuple[list[Slot], str]:
+        try:
+            return await self._fetch()
+        except Blocked:
+            raise
+        except Exception as e:  # network errors, timeouts
+            raise Blocked(f"rktermin network: {type(e).__name__}: {str(e)[:120]}") from e
+
+    async def _fetch(self) -> tuple[list[Slot], str]:
         async with AsyncSession(proxies=self.proxies, timeout=30) as s:
             cat = await self._category(s)
             page = ""
