@@ -45,6 +45,8 @@ HELP = (
     "1. /order — выбираешь страну, даты и отправляешь данные паспорта\n"
     "2. Мы ловим свободный слот и записываем тебя\n"
     "3. Присылаем подтверждение записи — ты оплачиваешь сервис в крипте\n\n"
+    "💸 Цена — {price} €, ниже, чем у конкурентов: мы не вредители, а помогаторы. "
+    "Платишь только когда запись уже есть.\n\n"
     "<b>Страны</b>\n"
     "Австрия, Бельгия, Венгрия, Германия, Дания, Исландия, Люксембург, Нидерланды, Норвегия, "
     "Словакия, Финляндия, Хорватия\n\n"
@@ -66,17 +68,26 @@ DESCRIPTION = (
     "Запись на шенгенскую визу с Кипра под ключ.\n\n"
     "Выбираешь страну и даты, отправляешь данные — мы ловим свободный слот и записываем тебя. "
     "Оплата только после брони.\n\n"
+    "💸 {price} € — ниже, чем у конкурентов: мы не вредители, а помогаторы.\n\n"
     "12 стран: Австрия, Бельгия, Венгрия, Германия, Дания, Исландия, Люксембург, Нидерланды, Норвегия, "
     "Словакия, Финляндия, Хорватия.\n\n"
     "Нажми «Старт», чтобы начать."
 )
-SHORT_DESCRIPTION = "Запись на шенгенскую визу с Кипра под ключ. Оплата только после брони."
+SHORT_DESCRIPTION = "Запись на шенгенскую визу с Кипра под ключ. {price} € — дешевле конкурентов, оплата после брони."
+
+
+def price_str(settings: Settings) -> str:
+    return f"{settings.default_price:.0f}"
+
+
+def help_text(settings: Settings, admin: bool = False) -> str:
+    return HELP.replace("{price}", price_str(settings)) + (ADMIN_HELP if admin else "")
 
 
 async def setup_commands(bot, settings: Settings) -> None:
     try:
-        await bot.set_my_description(DESCRIPTION)
-        await bot.set_my_short_description(SHORT_DESCRIPTION)
+        await bot.set_my_description(DESCRIPTION.replace("{price}", price_str(settings)))
+        await bot.set_my_short_description(SHORT_DESCRIPTION.replace("{price}", price_str(settings)))
     except Exception:
         pass  # rate-limited by Telegram if called too often; not critical
     user = [BotCommand(command=c, description=d) for c, d in USER_COMMANDS]
@@ -190,14 +201,14 @@ async def start(message: Message, command: CommandObject, db: Database, settings
     if allowed:
         if admin:
             await setup_commands(message.bot, settings)
-        await message.answer(HELP + (ADMIN_HELP if admin else ""))
+        await message.answer(help_text(settings, admin))
     else:
         await message.answer("Привет! Запрос на доступ отправлен админу.")
 
 
 @router.message(Command("help"))
 async def help_(message: Message, settings: Settings) -> None:
-    await message.answer(HELP + (ADMIN_HELP if is_admin(message.from_user.id, settings) else ""))
+    await message.answer(help_text(settings, is_admin(message.from_user.id, settings)))
 
 
 # ---- views ----
@@ -482,7 +493,7 @@ async def _set_flag(bot, db: Database, uid: int, action: str) -> str:
         name = await db.set_allowed(uid, True)
         if name is not None:
             try:
-                await bot.send_message(uid, "Доступ выдан!\n\n" + HELP)
+                await bot.send_message(uid, "Доступ выдан! Команды — /help")
             except Exception:
                 pass
     else:
