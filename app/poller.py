@@ -140,6 +140,7 @@ class Poller:
     # ---- one pass over all offered missions ----
     async def cycle(self) -> None:
         self._cycle_no += 1
+        await self.register_static()  # Germany (and Greece) are never discovered: keep them switched on
         missions = await self.db.offered_missions()
         now = datetime.now(timezone.utc)
         vfs_paused = False
