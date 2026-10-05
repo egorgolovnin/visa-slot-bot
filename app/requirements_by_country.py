@@ -24,17 +24,24 @@ class Requirements:
     birth: bool = True
     passport_exp: bool = True
     online_payment: bool = False   # VFS payOnlineEnabled
+    at_centre: str = ""            # what the client pays himself on the appointment day
 
 
 VFS = "VFS Global"
 REQUIREMENTS: dict[str, Requirements] = {
-    "hun": Requirements(22.80, gender=True, passport_scan=False, system=VFS, online_payment=True),
-    "aut": Requirements(0.0, gender=True, passport_scan=False, system=VFS, online_payment=False),
-    "svk": Requirements(40.00, gender=True, passport_scan=False, system=VFS, online_payment=True),
+    # fees: VFS Cyprus country pages (05.10.2026). Only Hungary charges at booking; others at the centre.
+    "hun": Requirements(22.80, gender=True, passport_scan=False, system=VFS, online_payment=True,
+                        at_centre="консульский сбор 90 €"),
+    "aut": Requirements(0.0, gender=True, passport_scan=False, system=VFS, online_payment=False,
+                        at_centre="консульский сбор 90 € + сервисный сбор VFS 25,27 € (картой)"),
+    "svk": Requirements(0.0, gender=True, passport_scan=False, system=VFS, online_payment=True,
+                        at_centre="консульский сбор 90 € (наличными) + сервисный сбор визового центра"),
     "fin": Requirements(0.0, gender=False, passport_scan=False, system=VFS, birth=False, passport_exp=False,
-                        online_payment=True),
-    "hrv": Requirements(0.0, gender=True, passport_scan=False, system=VFS, online_payment=True),
-    "deu": Requirements(0.0, gender=False, passport_scan=False, system="посольство Германии", phone=False),
+                        online_payment=True, at_centre="консульский сбор 90 € + сервисный сбор VFS 20 €"),
+    "hrv": Requirements(0.0, gender=True, passport_scan=False, system=VFS, online_payment=True,
+                        at_centre="консульский сбор 90 € + сервисный сбор VFS 31 €"),
+    "deu": Requirements(0.0, gender=False, passport_scan=False, system="посольство Германии", phone=False,
+                        at_centre="консульский сбор 90 €"),
     "grc": Requirements(0.0, gender=False, passport_scan=False, system="посольство Греции", phone=False),
 }
 DEFAULT = Requirements(0.0, gender=True, passport_scan=False, system=VFS)

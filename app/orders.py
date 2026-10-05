@@ -61,7 +61,10 @@ DESTINATIONS: dict[str, tuple[str, str, str]] = {
     "aut": ("Австрия", "aut", "VFS Global, Никосия"),
     "hun": ("Венгрия", "hun", "VFS Global, Никосия"),
     "svk": ("Словакия", "svk", "VFS Global, Никосия"),
+    "cze": ("Чехия", "svk", "подача через визовый центр Словакии"),
+    "svn": ("Словения", "svk", "подача через визовый центр Словакии"),
     "fin": ("Финляндия", "fin", "VFS Global, Никосия"),
+    "swe": ("Швеция", "fin", "подача через визовый центр Финляндии"),
     "hrv": ("Хорватия", "hrv", "VFS Global, Никосия"),
     "deu": ("Германия", "deu", "посольство Германии, Никосия"),
     "nld": ("Нидерланды", "deu", "подача в посольстве Германии"),
@@ -506,6 +509,8 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
            f"🤝 Наш сервис: <b>{price:.0f} €</b> — после брони\n"
            f"Итого: <b>{fee + price:.2f} €</b>\n\n" if fee else
            f"Стоимость сервиса: <b>{price:.0f} €</b> (после брони)\n\n")
+        + (f"🏛 В день подачи оплатишь сам: {requirements(data['mission']).at_centre}.\n\n"
+           if requirements(data["mission"]).at_centre else "")
         + CONSENT + (FEE_NOTE if fee else "")
     )
     kb = InlineKeyboardBuilder()

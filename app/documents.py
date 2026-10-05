@@ -13,8 +13,11 @@ DOC_LINKS: dict[str, list[tuple[str, str]]] = {
         ("Требования посольства Австрии", "https://www.bmeia.gv.at/en/austrian-embassy-nicosia/travels-to-austria/entrance-and-residence/how-to-apply"),
     ],
     "fin": [("Документы, сборы, анкета (VFS)", "https://visa.vfsglobal.com/one-pager/Finland/Cyprus/English/")],
-    "svk": [("Страница визового центра Словакии (VFS)", "https://visa.vfsglobal.com/cyp/en/svk")],
-    "hrv": [("Страница визового центра Хорватии (VFS)", "https://visa.vfsglobal.com/cyp/en/hrv")],
+    "svk": [("Порядок подачи и онлайн-анкета (посольство Словакии)",
+             "https://www.mzv.sk/en/web/nikozia-en/services/visa-information/schengen-visa"),
+            ("Страница визового центра (VFS)", "https://visa.vfsglobal.com/cyp/en/svk")],
+    "hrv": [("Документы и сборы (VFS)", "https://visa.vfsglobal.com/one-pager/croatia/cyprus/english/"),
+            ("Онлайн-анкета на визу (МИД Хорватии)", "https://crovisa.mvep.hr")],
     "deu": [("Шенгенская виза: документы и правила (посольство Германии)", "https://nikosia.diplo.de/cy-en/service/1672100-1672100")],
 }
 # destination-specific extras (countries whose visas the German embassy issues)
