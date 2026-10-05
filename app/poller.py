@@ -31,6 +31,8 @@ REDISCOVER_EVERY = timedelta(days=7)
 # missions served by non-VFS systems: code -> display name
 RK_MISSIONS = {"deu": "Германия (+NL, BE, DK, NO, IS, LU)"}
 ABROAD_EVERY = 3   # centres abroad are polled every 3rd cycle (~30 min): less load, fewer 429s
+import os as _os  # noqa: E402
+ABROAD_ON = _os.getenv("ABROAD_ORDERS", "false").lower() in ("1", "true", "yes")
 SS_MISSIONS = {"grc": "Греция (+Мальта)"}
 NON_VFS = set(RK_MISSIONS) | set(SS_MISSIONS) | {"mlt", "nld", "bel", "dnk", "nor", "isl", "lux"}
 
@@ -144,8 +146,8 @@ class Poller:
         for code, name in missions:
             if code in RK_MISSIONS and self.rk_resume_at and now < self.rk_resume_at:
                 continue
-            if "-" in code and self._cycle_no % ABROAD_EVERY:
-                continue
+            if "-" in code and (not ABROAD_ON or self._cycle_no % ABROAD_EVERY):
+                continue  # MVP: centres abroad are not polled while abroad orders are closed
             is_vfs = code not in RK_MISSIONS and code not in SS_MISSIONS
             if is_vfs and vfs_paused:
                 continue

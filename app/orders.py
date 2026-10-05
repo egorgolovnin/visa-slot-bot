@@ -343,7 +343,9 @@ async def order_region(call: CallbackQuery, state: FSMContext, db: Database, set
 
 
 async def send_destinations(message: Message, db: Database, settings: Settings, uid: int, region: str) -> None:
-    offered = {c for c, _ in await db.offered_missions()}
+    import os
+    hidden = {x.strip() for x in os.getenv("ORDER_EXCLUDE", "hun").split(",") if x.strip()}
+    offered = {c for c, _ in await db.offered_missions()} - hidden
     taken = set() if is_admin(uid, settings) else await db.open_order_missions(uid)
     kb = InlineKeyboardBuilder()
     n = 0
@@ -910,8 +912,25 @@ async def my_orders(message: Message, db: Database, uid: int | None = None) -> N
             kb.button(text=f"💳 Оплатить сбор #{r['id']} — {r['fee_eur']:.2f} €", url=r["fee_invoice_url"])
         if r["status"] in ("awaiting_fee", "new", "in_progress"):
             kb.button(text=f"✖️ Отменить #{r['id']}", callback_data=f"myo:cancel:{r['id']}")
+        if r["status"] in ("paid", "done"):
+            kb.button(text=f"📄 Подтверждение #{r['id']}", callback_data=f"myo:pdf:{r['id']}")
     kb.adjust(1)
     await message.answer("\n".join(lines), reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("myo:pdf:"))
+async def client_pdf(call: CallbackQuery, db: Database) -> None:
+    oid = int(call.data.split(":")[2])
+    o = await db.order(oid)
+    await call.answer()
+    if not o or o["tg_id"] != call.from_user.id or o["status"] not in ("paid", "done"):
+        return
+    if o["confirmation_file"]:
+        await call.message.answer_document(o["confirmation_file"], caption=f"Подтверждение записи, заявка #{oid}\n"
+                                                                           f"{o['appointment'] or ''}")
+    else:
+        await call.message.answer(f"Заявка #{oid}: запись {html.escape(o['appointment'] or '')}. "
+                                  "Файла подтверждения нет — если нужен, напиши в /support.")
 
 
 @router.callback_query(F.data.startswith("myo:cancel:"))
@@ -1165,7 +1184,7 @@ async def booking_details(message: Message, state: FSMContext, db: Database, set
         sent = await message.answer_document(BufferedInputFile(data, filename=name),
                                              caption="🧹 Так файл получит клиент: метаданные очищены, имя нейтральное.")
         file_id = sent.document.file_id
-    await db.update_order(oid, status="booked", appointment=appointment[:200], price_eur=price,
+    await db.update_order(oid, status="booked", booked_at=datetime.now(timezone.utc), appointment=appointment[:200], price_eur=price,
                           confirmation_file=file_id)
     await state.clear()
     await db.log_event(o["tg_id"], "order_booked", f"#{oid}")
@@ -1328,11 +1347,98 @@ async def payment_watcher(bot: Bot, db: Database, settings: Settings, every: int
             if tick % 30 == 1:  # every ~30 min: housekeeping
                 await auto_complete(bot, db, settings)
                 await db.purge_stale_forms(hours=48)
+                await send_reminders(bot, db, settings)
+                purged = await db.purge_old_applicant_data(days=60)
+                if purged:
+                    log.info("wiped applicant data of %d finished orders", purged)
                 from .cases import ask_for_cases
                 await ask_for_cases(bot, db)
             await weekly_slots_report(bot, db, settings)
         except Exception:
             log.exception("payment watcher")
+
+
+async def send_reminders(bot: Bot, db: Database, settings: Settings) -> None:
+    """Nudges that keep orders moving without the admin: payment, fee, appointment, expired date window."""
+    from .parsing import parse_date
+    now = datetime.now(timezone.utc)
+    today = date.today()
+    for o in await db.orders_for_reminders():
+        oid, name = o["id"], order_country(o)
+        # service invoice unpaid: remind after 1 and 3 days
+        if o["status"] == "booked" and o["invoice_url"] and o["booked_at"]:
+            age = (now - o["booked_at"]).total_seconds() / 86400
+            if (o["pay_reminders"] == 0 and age >= 1) or (o["pay_reminders"] == 1 and age >= 3):
+                kb = InlineKeyboardBuilder()
+                kb.button(text=f"💳 Оплатить {o['price_eur']:.0f} €", url=o["invoice_url"])
+                if await notify_client(bot, o["tg_id"], f"Напоминаем: запись по заявке #{oid} ({html.escape(name)}) "
+                                       f"сделана — {html.escape(o['appointment'] or '')}. Осталось оплатить сервис.",
+                                       reply_markup=kb.as_markup()):
+                    await db.update_order(oid, pay_reminders=o["pay_reminders"] + 1)
+        # fee invoice unpaid for a day (it expires after 48h)
+        if o["status"] == "awaiting_fee" and o["fee_invoice_url"] and not o["fee_reminded"] \
+                and (now - o["created_at"]).total_seconds() > 86400:
+            kb = InlineKeyboardBuilder()
+            kb.button(text=f"💳 Оплатить сбор {o['fee_eur']:.2f} €", url=o["fee_invoice_url"])
+            await notify_client(bot, o["tg_id"], f"Заявка #{oid}: ждём оплату сбора визового центра — без неё не можем "
+                                "забронировать слот. Счёт действует ещё сутки.", reply_markup=kb.as_markup())
+            await db.update_order(oid, fee_reminded=True)
+        # appointment tomorrow
+        appt = parse_date(o["appointment"] or "")
+        if o["status"] in ("booked", "paid") and appt and appt - today == timedelta(days=1) and not o["appt_reminded"]:
+            from .documents import links_html
+            docs = links_html(o["mission"], o["destination"])
+            await notify_client(bot, o["tg_id"], f"⏰ Завтра подача документов: <b>{html.escape(o['appointment'])}</b> "
+                                f"({html.escape(name)}).\nВозьми паспорт, ВНЖ, распечатанную анкету, фото и документы "
+                                "из списка. Приходи за 10–15 минут." + (f"\n\n📄 Список документов:\n{docs}" if docs else ""),
+                                disable_web_page_preview=True)
+            await db.update_order(oid, appt_reminded=True)
+        # the client's date window is over and nothing was booked
+        if o["status"] in ("new", "in_progress") and o["date_to"] and o["date_to"] < today and not o["window_asked"]:
+            kb = InlineKeyboardBuilder()
+            kb.button(text="🗓 Указать новые даты", callback_data=f"myo:redate:{oid}")
+            kb.button(text="✖️ Отменить заявку", callback_data=f"myo:cancel:{oid}")
+            kb.adjust(1)
+            await notify_client(bot, o["tg_id"], f"Заявка #{oid} ({html.escape(name)}): даты, которые ты указал, прошли, "
+                                "а подходящий слот так и не появился. Продлим поиск на новые даты?", reply_markup=kb.as_markup())
+            await db.update_order(oid, window_asked=True)
+            for a in settings.admin_ids:
+                await notify_client(bot, a, f"🗓 Заявка #{oid}: окно дат клиента истекло, спросили про новые даты.")
+
+
+class Redate(StatesGroup):
+    window = State()
+
+
+@router.callback_query(F.data.startswith("myo:redate:"))
+async def client_redate(call: CallbackQuery, state: FSMContext, db: Database) -> None:
+    oid = int(call.data.split(":")[2])
+    o = await db.order(oid)
+    await call.answer()
+    if not o or o["tg_id"] != call.from_user.id or o["status"] not in ("new", "in_progress"):
+        await call.message.answer("Эту заявку уже нельзя изменить. Статус — /myorders")
+        return
+    await state.set_state(Redate.window)
+    await state.update_data(order_id=oid)
+    await call.message.answer("Новые даты подачи: например <code>декабрь</code>, <code>5-20 декабря</code> "
+                              "или <code>ближайшие 2 недели</code>.")
+
+
+@router.message(Redate.window, F.text, NOT_A_COMMAND)
+async def client_redate_window(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    from .parsing import parse_range
+    kind, d1, d2 = parse_range(message.text)
+    if kind == "error" or (kind == "ok" and (d2 or d1) < date.today()):
+        await message.answer("Не получилось разобрать даты (или они в прошлом). Пример: <code>5-20 декабря</code>")
+        return
+    oid = (await state.get_data())["order_id"]
+    await state.clear()
+    d1 = max(d1, date.today()) if d1 else None
+    await db.update_order(oid, date_from=d1, date_to=d2, window_asked=False)
+    window = "любые" if kind == "any" else (f"{fmt_date(d1)}–{fmt_date(d2)}" if d2 else f"с {fmt_date(d1)}")
+    await message.answer(f"Готово: ищем слот по заявке #{oid} на даты {window} ✓")
+    for a in settings.admin_ids:
+        await notify_client(message.bot, a, f"🗓 Заявка #{oid}: клиент указал новые даты — {window}.")
 
 
 async def weekly_slots_report(bot: Bot, db: Database, settings: Settings) -> None:

@@ -144,6 +144,12 @@ ALTER TABLE visa_cases ADD COLUMN IF NOT EXISTS extra JSONB;
 CREATE UNIQUE INDEX IF NOT EXISTS visa_cases_ext ON visa_cases (source, external_id) WHERE external_id IS NOT NULL;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS case_asked BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS people INT NOT NULL DEFAULT 1;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS booked_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS pay_reminders INT NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS fee_reminded BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS appt_reminded BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS window_asked BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS data_purged BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS prices (
     mission   TEXT PRIMARY KEY,
     price_eur NUMERIC(10, 2) NOT NULL
@@ -154,6 +160,11 @@ ALTER TABLE prices ADD COLUMN IF NOT EXISTS fee_eur NUMERIC(10, 2);
 
 ACTIVE = ("new", "in_progress")           # bookable: fee (if any) is paid
 OPEN_STATUSES = ("awaiting_fee", "new", "in_progress", "booked", "paid")
+
+
+def _abroad_on() -> bool:
+    import os
+    return os.getenv("ABROAD_ORDERS", "false").lower() in ("1", "true", "yes")
 
 
 def _random_order_no() -> int:
@@ -316,7 +327,8 @@ class Database:
 
     async def missions_health(self) -> list[asyncpg.Record]:
         return await self.pool.fetch(
-            "SELECT code, name, fetched_at, error_at, last_error FROM missions WHERE offered ORDER BY name")
+            """SELECT code, name, fetched_at, error_at, last_error FROM missions
+               WHERE offered AND (code NOT LIKE '%-%' OR $1) ORDER BY name""", _abroad_on())
 
     # ---- slots ----
     async def current(self, mission: str) -> dict[tuple[str, str], date | None]:
@@ -354,7 +366,7 @@ class Database:
             """SELECT m.code, m.name, m.fetched_at, m.last_error, s.centre, s.category, s.earliest,
                       s.vfs_updated, s.seen_at
                FROM missions m LEFT JOIN current_slots s ON s.mission = m.code
-               WHERE m.offered ORDER BY m.name, s.centre, s.category""")
+               WHERE m.offered AND (m.code NOT LIKE '%-%' OR $1) ORDER BY m.name, s.centre, s.category""", _abroad_on())
 
     async def history(self, mission: str, limit: int = 15) -> list[asyncpg.Record]:
         return await self.pool.fetch(
@@ -585,3 +597,18 @@ class Database:
             f"""INSERT INTO visa_cases ({", ".join(cols)}) VALUES ({placeholders})
                 ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET {updates}""", *vals)
         return not exists
+
+    async def orders_for_reminders(self) -> list:
+        return await self.pool.fetch(
+            """SELECT id, tg_id, status, destination, mission, appointment, invoice_url, price_eur, fee_eur,
+                      fee_invoice_url, created_at, booked_at, pay_reminders, fee_reminded, appt_reminded,
+                      window_asked, date_to, confirmation_file
+               FROM orders WHERE status IN ('awaiting_fee', 'new', 'in_progress', 'booked', 'paid')""")
+
+    async def purge_old_applicant_data(self, days: int) -> int:
+        """Passport data is only needed until the appointment: wipe it for long-finished orders."""
+        res = await self.pool.execute(
+            """UPDATE orders SET applicant = '', data_purged = TRUE
+               WHERE NOT data_purged AND status IN ('done', 'cancelled')
+                 AND updated_at < now() - make_interval(days => $1)""", days)
+        return int(res.split()[-1])
