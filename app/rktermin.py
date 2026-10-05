@@ -13,6 +13,7 @@ import logging
 import os
 import random
 import re
+from collections import Counter
 from datetime import date, datetime
 
 from curl_cffi.requests import AsyncSession
@@ -26,7 +27,7 @@ LOCATION, REALM = "niko", "926"
 CENTRE = "Посольство Германии, Никосия"
 CATEGORY = "Шенген до 90 дней (DE, NL, BE, DK, NO, IS, LU)"
 NO_SLOTS = "no appointments available"
-MAX_CAPTCHA_TRIES = 4
+MAX_CAPTCHA_TRIES = 6
 MONTHS_AHEAD = 3
 
 CAPTCHA_RE = re.compile(r"url\(['\"]?data:image/[a-z]+;base64,([A-Za-z0-9+/=\s]+)", re.I)
@@ -38,20 +39,47 @@ DAY_RE = re.compile(r"appointment_showDay\.do[^\"']*?dateStr=(\d{2}\.\d{2}\.\d{4
 NEXT_MONTH_RE = re.compile(r"href=\"([^\"]*appointment_showMonth\.do[^\"]*dateStr=(\d{2}\.\d{2}\.\d{4})[^\"]*)\"")
 CATEGORY_RE = re.compile(r"categoryId=(\d+)")
 
-_ocr = None
+_models: tuple | None = None
+
+
+def _solvers() -> tuple:
+    global _models
+    if _models is None:
+        import ddddocr  # heavy import, load once
+        _models = (ddddocr.DdddOcr(show_ad=False), ddddocr.DdddOcr(show_ad=False, beta=True))
+    return _models
 
 
 def _solver():
-    global _ocr
-    if _ocr is None:
-        import ddddocr  # heavy import, load once
-        _ocr = ddddocr.DdddOcr(show_ad=False)
-    return _ocr
+    return _solvers()[0]
+
+
+def _variants(image: bytes) -> list[bytes]:
+    import cv2
+    import numpy as np
+    img = cv2.imdecode(np.frombuffer(image, np.uint8), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return [image]
+    _, otsu = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    median = cv2.medianBlur(img, 3)
+    big = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    return [image] + [cv2.imencode(".png", v)[1].tobytes() for v in (otsu, median, big)]
 
 
 def solve_captcha(image: bytes) -> str | None:
-    text = re.sub(r"[^a-z0-9]", "", _solver().classification(image).lower())
-    return text if len(text) == 6 else None
+    """Vote across 2 OCR models x 4 preprocessings. The captcha is always 6 chars [a-z0-9];
+    a hook on the right edge often adds a 7th char, so 7-char reads also vote with their 6-char cuts."""
+    votes: Counter[str] = Counter()
+    for model in _solvers():
+        for variant in _variants(image):
+            text = re.sub(r"[^a-z0-9]", "", model.classification(variant).lower())
+            # every 6-char window of a read votes once: noise is usually an extra char at an edge
+            for i in range(0, max(0, len(text) - 6) + 1):
+                if len(text) - 6 <= 2:
+                    votes[text[i:i + 6]] += 1
+    if not votes:
+        return None
+    return votes.most_common(1)[0][0]
 
 
 def find_schengen_category(page: str) -> str | None:
