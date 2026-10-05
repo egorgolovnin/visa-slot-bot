@@ -30,9 +30,7 @@ REDISCOVER_EVERY = timedelta(days=7)
 
 # missions served by non-VFS systems: code -> display name
 RK_MISSIONS = {"deu": "Германия (+NL, BE, DK, NO, IS, LU)"}
-# VFS centres outside Cyprus (for clients who live there): code = "<vfs country>-<mission>"
-ABROAD_MISSIONS = {"are-fra": "Франция (ОАЭ, Абу-Даби)", "are-ita": "Италия (ОАЭ, Дубай)",
-                   "are-deu": "Германия (ОАЭ, Дубай)", "srb-hrv": "Хорватия (Сербия, Белград)"}
+ABROAD_EVERY = 3   # centres abroad are polled every 3rd cycle (~30 min): less load, fewer 429s
 SS_MISSIONS = {"grc": "Греция (+Мальта)"}
 NON_VFS = set(RK_MISSIONS) | set(SS_MISSIONS) | {"mlt", "nld", "bel", "dnk", "nor", "isl", "lux"}
 
@@ -64,6 +62,7 @@ class Poller:
         self.health = Health()
         self._wake = asyncio.Event()
         self._last_alert: dict[tuple, datetime] = {}
+        self._cycle_no = 0
 
     async def close(self) -> None:
         await self.client.close()
@@ -89,8 +88,6 @@ class Poller:
 
     async def register_static(self) -> None:
         for code, name in RK_MISSIONS.items():
-            await self.db.set_mission(code, name, True)
-        for code, name in ABROAD_MISSIONS.items():
             await self.db.set_mission(code, name, True)
         for code, name in SS_MISSIONS.items():
             await self.db.set_mission(code, name, supersaas.enabled())
@@ -140,14 +137,15 @@ class Poller:
 
     # ---- one pass over all offered missions ----
     async def cycle(self) -> None:
+        self._cycle_no += 1
         missions = await self.db.offered_missions()
         now = datetime.now(timezone.utc)
         vfs_paused = False
         for code, name in missions:
             if code in RK_MISSIONS and self.rk_resume_at and now < self.rk_resume_at:
                 continue
-            if code.startswith("are-") and not self.s.proxy_url:
-                continue  # VFS UAE refuses datacenter IPs: orders are taken, slots are watched once a proxy is set
+            if "-" in code and self._cycle_no % ABROAD_EVERY:
+                continue
             is_vfs = code not in RK_MISSIONS and code not in SS_MISSIONS
             if is_vfs and vfs_paused:
                 continue
@@ -280,6 +278,16 @@ class Poller:
         except Exception as e:
             log.warning("visarea import failed: %s", e)
 
+    async def discover_abroad(self) -> None:
+        if await self.db.kv_get("abroad_discovery") == "v1":
+            return
+        await self.db.kv_set("abroad_discovery", "v1")
+        try:
+            from .abroad import discover
+            await self.alert_admins((await discover(self))[:3800])
+        except Exception:
+            log.exception("abroad discovery")
+
     async def run(self) -> None:
         log.info("poller started, proxy=%s", bool(self.s.proxy_url))
         await self.register_static()
@@ -288,6 +296,7 @@ class Poller:
         except Exception:
             log.exception("vfs fields probe")
         await self.import_open_cases()
+        asyncio.create_task(self.discover_abroad())
         last_discover = await self.db.last_discovery()
         if last_discover is None:
             await self.alert_admins("🔎 Первая разведка завершена.\n" + await self.discover())

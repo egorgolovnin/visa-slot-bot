@@ -60,8 +60,14 @@ REQUIREMENTS: dict[str, Requirements] = {
 DEFAULT = Requirements(0.0, gender=True, passport_scan=False, system=VFS)
 
 
+ABROAD_DEFAULT = Requirements(0.0, gender=True, passport_scan=False, system=VFS,
+                              at_centre="консульский сбор и сервисный сбор VFS по прайсу визового центра")
+
+
 def requirements(mission: str) -> Requirements:
-    return REQUIREMENTS.get(mission, DEFAULT)
+    if mission in REQUIREMENTS:
+        return REQUIREMENTS[mission]
+    return ABROAD_DEFAULT if "-" in mission else DEFAULT
 
 
 def form_steps(mission: str) -> list[str]:

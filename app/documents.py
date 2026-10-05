@@ -48,7 +48,11 @@ PROCESS = (
 
 
 def links_for(mission: str, destination: str | None = None) -> list[tuple[str, str]]:
-    return DOC_LINKS.get(mission, []) + DESTINATION_EXTRA.get(destination or "", [])
+    links = DOC_LINKS.get(mission)
+    if links is None and "-" in mission:  # VFS centre abroad: its own page has documents and fees
+        c, m = mission.split("-", 1)
+        links = [("Документы, сборы и правила визового центра (VFS)", f"https://visa.vfsglobal.com/{c}/en/{m}")]
+    return (links or []) + DESTINATION_EXTRA.get(destination or "", [])
 
 
 def links_html(mission: str, destination: str | None = None) -> str:

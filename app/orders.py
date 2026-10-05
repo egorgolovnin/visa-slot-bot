@@ -61,17 +61,44 @@ class Booking(StatesGroup):
 
 
 # where the client applies from (the country whose residence permit they hold)
-REGIONS = {"cy": ("🇨🇾 Кипр", "ВНЖ Кипра"), "ae": ("🇦🇪 ОАЭ", "резидентская виза ОАЭ (Emirates ID)"),
-           "rs": ("🇷🇸 Сербия", "ВНЖ Сербии")}
-DEST_REGION = {"ae_fra": "ae", "ae_ita": "ae", "ae_deu": "ae", "rs_hrv": "rs"}  # everything else is Cyprus
+from .abroad import COUNTRIES as ABROAD_COUNTRIES  # noqa: E402
+
+REGIONS = {"cy": ("🇨🇾 Кипр", "ВНЖ Кипра"), **ABROAD_COUNTRIES}
 
 
 def region_of(key: str) -> str:
-    return DEST_REGION.get(key, "cy")
+    """Static keys are Cyprus; dynamic ones look like 'x_srb-hrv' (VFS centre abroad)."""
+    return key[2:].split("-", 1)[0] if key.startswith("x_") else "cy"
+
+
+class _Destinations(dict):
+    """Static Cyprus destinations plus computed ones for VFS centres abroad ('x_<country>-<mission>')."""
+
+    def _abroad(self, key):
+        from .vfs import SCHENGEN
+        code = key[2:]
+        c, m = code.split("-", 1)
+        return (SCHENGEN.get(m, m.upper()), code, f"VFS Global, {ABROAD_COUNTRIES.get(c, ('', c))[0].split(' ', 1)[-1]}")
+
+    def __contains__(self, key):
+        return super().__contains__(key) or (isinstance(key, str) and key.startswith("x_") and "-" in key)
+
+    def __getitem__(self, key):
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        if isinstance(key, str) and key.startswith("x_") and "-" in key:
+            return self._abroad(key)
+        raise KeyError(key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
 
 # destination country -> (name, mission that handles it, note shown to the client)
-DESTINATIONS: dict[str, tuple[str, str, str]] = {
+DESTINATIONS: dict[str, tuple[str, str, str]] = _Destinations({
     "aut": ("Австрия", "aut", "VFS Global, Никосия"),
     "hun": ("Венгрия", "hun", "VFS Global, Никосия"),
     "svk": ("Словакия", "svk", "VFS Global, Никосия"),
@@ -87,13 +114,9 @@ DESTINATIONS: dict[str, tuple[str, str, str]] = {
     "nor": ("Норвегия", "deu", "подача в посольстве Германии"),
     "isl": ("Исландия", "deu", "подача в посольстве Германии"),
     "lux": ("Люксембург", "deu", "подача в посольстве Германии"),
-    "ae_fra": ("Франция", "are-fra", "VFS Global, Абу-Даби"),
-    "ae_ita": ("Италия", "are-ita", "VFS Global, Дубай"),
-    "ae_deu": ("Германия", "are-deu", "VFS Global, Дубай"),
-    "rs_hrv": ("Хорватия", "srb-hrv", "VFS Global, Белград"),
     "grc": ("Греция", "grc", "посольство Греции, Никосия"),
     "mlt": ("Мальта", "grc", "подача в посольстве Греции"),
-}
+})
 
 from .requirements_by_country import form_steps, requirements  # noqa: E402
 
@@ -292,14 +315,15 @@ async def order_start(message: Message, state: FSMContext, db: Database, setting
     offered = {c for c, _ in await db.offered_missions()}
     from .documents import PROCESS
     await message.answer(PROCESS.format(price=f"{settings.default_price:.0f}", docs_price=f"{settings.docs_price:.0f}"))
-    regions = sorted({region_of(k) for k, (_, m, _) in DESTINATIONS.items() if m in offered},
+    regions = sorted({region_of(k) for k, (_, m, _) in DESTINATIONS.items() if m in offered}
+                     | {c.split("-", 1)[0] for c in offered if "-" in c and c.split("-", 1)[0] in REGIONS},
                      key=lambda r: list(REGIONS).index(r))
     if len(regions) > 1:
         kb = InlineKeyboardBuilder()
         for r in regions:
             kb.button(text=REGIONS[r][0], callback_data=f"ord:r:{r}")
         kb.button(text="✖️ Отмена", callback_data="ord:cancel")
-        kb.adjust(len(regions), 1)
+        kb.adjust(*([2] * ((len(regions) + 1) // 2)), 1)
         await message.answer("<b>Где подаёшь документы?</b> Это страна, где у тебя ВНЖ.", reply_markup=kb.as_markup())
         return
     await send_destinations(message, db, settings, uid, "cy")
@@ -321,7 +345,11 @@ async def send_destinations(message: Message, db: Database, settings: Settings, 
     taken = set() if is_admin(uid, settings) else await db.open_order_missions(uid)
     kb = InlineKeyboardBuilder()
     n = 0
-    for key, (name, mission, _) in sorted(DESTINATIONS.items(), key=lambda kv: kv[1][0]):
+    if region == "cy":
+        options = [(k, v[0], v[1]) for k, v in DESTINATIONS.items()]
+    else:
+        options = [(f"x_{c}", DESTINATIONS[f"x_{c}"][0], c) for c in offered if c.startswith(region + "-")]
+    for key, name, mission in sorted(options, key=lambda o: o[1]):
         if mission in offered and mission not in taken and region_of(key) == region:
             kb.button(text=name, callback_data=f"ord:d:{key}")
             n += 1

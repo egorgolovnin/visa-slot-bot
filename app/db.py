@@ -298,7 +298,7 @@ class Database:
 
     async def last_discovery(self) -> datetime | None:
         return await self.pool.fetchval(
-            "SELECT max(last_checked) FROM missions WHERE offered IS NOT NULL AND code NOT IN ('deu', 'grc')")
+            "SELECT max(last_checked) FROM missions WHERE offered IS NOT NULL AND code NOT IN ('deu', 'grc') AND code NOT LIKE '%-%'")
 
     async def was_fetched(self, code: str) -> bool:
         return bool(await self.pool.fetchval("SELECT fetched_at IS NOT NULL FROM missions WHERE code = $1", code))
