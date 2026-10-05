@@ -68,3 +68,10 @@ def test_rktermin_parsers():
     page = ('<a href="appointment_showDay.do?locationCode=niko&amp;realmId=926&amp;categoryId=1111&amp;dateStr=24.11.2026">24</a>'
             '<a href="appointment_showDay.do?locationCode=niko&amp;realmId=926&amp;categoryId=1111&amp;dateStr=12.11.2026">12</a>')
     assert [d.isoformat() for d in parse_days(page)] == ["2026-11-12", "2026-11-24"]
+
+
+def test_rktermin_only_continue_button_is_sent():
+    import inspect
+    from app import rktermin
+    src = inspect.getsource(rktermin.RkTerminClient._pass_captcha)
+    assert 'not k.startswith("action:")' in src

@@ -138,8 +138,10 @@ class RkTerminClient:
                 fields[name] = answer
         if not any("captcha" in n.lower() for n in fields):
             fields["captchaText"] = answer
-        # the page's own JS submits to extern/appointment_showMonth.do with the showMonth action
-        fields.setdefault("action:appointment_showMonth", "Continue")
+        # the form has three submit buttons (new picture / continue / cancel): send only "continue",
+        # otherwise the server runs "load another picture" and every answer looks wrong
+        fields = {k: v for k, v in fields.items() if not k.startswith("action:")}
+        fields["action:appointment_showMonth"] = "Continue"
         target = f"{BASE}/appointment_showMonth.do"
         await asyncio.sleep(random.uniform(1.5, 3))
         r = await s.post(target, data=fields, impersonate="chrome", headers={"referer": url})
