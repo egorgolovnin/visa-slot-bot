@@ -38,13 +38,21 @@ def _outcome(result: str | None) -> str:
     r = (result or "").strip().lower()
     if not r:
         return "pending"
-    if r.startswith(("да", "yes", "одобр")) or "одобр" in r:
-        return "approved"
     if r.startswith(("нет", "no", "отказ")) or "отказ" in r:
         return "refused"
-    if any(w in r for w in ("жд", "рассм", "pending", "ещё", "еще")):
+    if any(w in r for w in ("жд", "рассм", "pending", "ещё не", "еще не")):
         return "pending"
+    # "да, ...", "одобрили", and free-text answers that describe the visa granted ("дали на 3", "26 дней", "мульти")
+    if r.startswith(("да", "yes")) or any(w in r for w in ("одобр", "дали", "выдал", "мульти", "мес", "дн", "недел", "год")):
+        return "approved"
     return "pending"
+
+
+def _validity(result: str | None) -> str | None:
+    """What the visa was granted for: 'под даты поездки (+- 5 дней)', 'от 1 до 3 месяцев', free text."""
+    r = (result or "").strip()
+    r = re.sub(r"^(да|yes)[,.:\s]*", "", r, flags=re.I).strip()
+    return (r[:1].upper() + r[1:])[:80] if r else None
 
 
 def _kind(v: str | None) -> str | None:
@@ -71,10 +79,7 @@ async def import_visarea(db: Database) -> str:
         ext = str(x.get("id"))
         country = COUNTRY.get((x.get("country_code") or "").upper(), x.get("country_code") or "?")
         result = x.get("result")
-        validity = None
-        m = re.search(r"(от .*|до .*|\d+.*(?:мес|год|дн).*)", result or "", re.I)
-        if m and _outcome(result) == "approved":
-            validity = m.group(1)[:60]
+        validity = _validity(result) if _outcome(result) == "approved" else None
         extra = {k: x.get(k) for k in ("citizenship", "docs", "tenure", "requested_term", "group_size", "tickets",
                                        "hotels", "extra_docs", "violations", "sch_same", "sch_other") if x.get(k)}
         is_new = await db.upsert_external_case(

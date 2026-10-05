@@ -137,7 +137,7 @@ function render(d) {
       <h2>Последние кейсы</h2>
       <div class="cases">${d.cases.map(c => `<article class="case ${c.outcome}">
         <h3>${esc(c.country)}: ${OUT[c.outcome]}</h3>
-        <div class="sub">Подача: ${month(c.month)}${c.days != null ? `. Решение через ${c.days} ${plural(c.days, "день", "дня", "дней")}` : ""}${c.visa_kind ? `. Виза ${c.visa_kind === "multi" ? "многократная" : "однократная"}` : ""}.</div>
+        <div class="sub">Подача: ${month(c.month)}${c.days != null ? `. Решение через ${c.days} ${plural(c.days, "день", "дня", "дней")}` : ""}${c.visa_kind ? `. Виза ${c.visa_kind === "multi" ? "многократная" : "однократная"}` : ""}${c.validity ? `. Срок: ${esc(c.validity.charAt(0).toLowerCase() + c.validity.slice(1))}` : ""}.</div>
         ${c.comment ? `<blockquote>${esc(c.comment)}</blockquote>` : ""}
         ${c.source === "visarea" ? `<div class="sub" style="margin-top:8px">Источник: <a href="https://cases.visarea.travel" rel="noopener" target="_blank">cases.visarea.travel</a></div>` : ""}
       </article>`).join("")}</div>

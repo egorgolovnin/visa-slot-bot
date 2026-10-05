@@ -141,7 +141,7 @@ async def cases_data(db: Database) -> dict:
     """Public, anonymous statistics from moderated cases. No names, no contacts, no exact dates."""
     import statistics
     rows = await db.pool.fetch(
-        """SELECT country, submitted_on, decided_on, outcome, visa_kind, comment, publish, source FROM visa_cases
+        """SELECT country, submitted_on, decided_on, outcome, visa_kind, validity, comment, publish, source FROM visa_cases
            WHERE status = 'published' ORDER BY COALESCE(decided_on, submitted_on, created_at::date) DESC""")
     def days(r):
         return (r["decided_on"] - r["submitted_on"]).days if r["decided_on"] and r["submitted_on"] else None
@@ -172,7 +172,7 @@ async def cases_data(db: Database) -> dict:
         "since": min(dates).strftime("%Y-%m") if dates else None,
         "countries": countries,
         "cases": [{"country": r["country"], "month": r["submitted_on"].strftime("%Y-%m") if r["submitted_on"] else None,
-                   "outcome": r["outcome"], "days": days(r), "visa_kind": r["visa_kind"], "source": r["source"],
+                   "outcome": r["outcome"], "days": days(r), "visa_kind": r["visa_kind"], "validity": r["validity"], "source": r["source"],
                    "comment": r["comment"] if r["publish"] else None} for r in rows[:60]],
         "sources": {"bot": sum(1 for r in rows if r["source"] == "bot"),
                     "visarea": sum(1 for r in rows if r["source"] == "visarea")},
