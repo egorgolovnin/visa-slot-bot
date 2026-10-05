@@ -29,7 +29,7 @@ LOCATION, REALM = "niko", "926"
 CENTRE = "Посольство Германии, Никосия"
 CATEGORY = "Шенген до 90 дней (DE, NL, BE, DK, NO, IS, LU)"
 NO_SLOTS = "no appointments available"
-MAX_CAPTCHA_TRIES = 6
+MAX_CAPTCHA_TRIES = 8
 MONTHS_AHEAD = 3
 
 CAPTCHA_RE = re.compile(r"url\(['\"]?data:image/[a-z]+;base64,([A-Za-z0-9+/=\s]+)", re.I)
@@ -78,9 +78,10 @@ def solve_captcha(image: bytes) -> str | None:
     for model in _solvers():
         for variant in _variants(image):
             text = re.sub(r"[^a-z0-9]", "", model.classification(variant).lower())
-            # every 6-char window of a read votes once: noise is usually an extra char at an edge
-            for i in range(0, max(0, len(text) - 6) + 1):
-                if len(text) - 6 <= 2:
+            # the captcha is exactly 6 chars: a read of 6-8 chars votes with each 6-char window
+            # (noise is usually an extra char at an edge); shorter reads are useless and never vote
+            if 6 <= len(text) <= 8:
+                for i in range(len(text) - 5):
                     votes[text[i:i + 6]] += 1
     if not votes:
         return None
