@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 
 from . import config
-from . import orders, support, web
+from . import mailbox, orders, support, web
 from .bot import TrackingMiddleware, attach_access, router, setup_commands
 from .db import Database
 from .fsm_storage import PgStorage
@@ -51,6 +51,11 @@ async def main() -> None:
         dp.include_router(r)
 
     await setup_commands(bot, settings)
+    if mailbox.enabled():
+        try:
+            log.info("mailbox ok: %s, %d messages in inbox", mailbox.address(), await mailbox.check())
+        except Exception as e:
+            log.error("mailbox check failed: %s", e)
     if orders.payments.enabled():
         try:
             log.info("crypto pay ok: %s", await orders.payments.check())
