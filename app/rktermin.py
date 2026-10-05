@@ -124,8 +124,10 @@ class RkTerminClient:
                 return page  # no captcha shown this time
             log.warning("captcha page not understood: %s", re.sub(r"\s+", " ", page)[:1500])
             raise Blocked("rktermin: captcha page not understood")
-        answer = solve_captcha(base64.b64decode(re.sub(r"\s+", "", img.group(1))))
+        raw_img = base64.b64decode(re.sub(r"\s+", "", img.group(1)))
+        answer = solve_captcha(raw_img)
         if not answer:
+            log.info("captcha OCR unusable: %r", _solver().classification(raw_img))
             return ""
         action, fields = form
         for name in list(fields):
@@ -138,9 +140,15 @@ class RkTerminClient:
         r = await s.post(target, data=fields, impersonate="chrome", headers={"referer": url})
         if r.status_code != 200:
             raise Blocked(f"rktermin POST {r.status_code}")
-        if "global-error" in r.text or CAPTCHA_RE.search(r.text):
-            return ""  # wrong captcha
-        return r.text
+        text = r.text
+        has_result = NO_SLOTS in text or DAY_RE.search(text) or NEXT_MONTH_RE.search(text)
+        if "global-error" in text or not has_result:
+            err = re.search(r"global-error[^>]*>(.*?)</", text, re.S)
+            log.info("captcha %r rejected: %s", answer,
+                     re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", err.group(1)))[:200] if err else
+                     re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:600])
+            return ""
+        return text
 
     async def fetch(self) -> tuple[list[Slot], str]:
         async with AsyncSession(proxies=self.proxies, timeout=30) as s:
