@@ -497,7 +497,7 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
            else ("ВНЖ: на продлении (ресипт)\n" if data.get("residence_receipt") else ""))
         + ("Скан паспорта: получен ✓\n" if data.get("passport_scan") else "")
         + (f"Телефон (для визового центра): {html.escape(data['phone'])}\n" if data.get("phone") else "")
-        + f"Email: {html.escape(data['email'])}\n"
+
         + (f"Связь: Telegram {html.escape(data['tg_contact'])} — пишем сюда, в этот чат\n\n" if data.get("tg_contact")
            else "Связь: пишем сюда, в этот чат\n\n")
         + (f"💳 Сбор визового центра: <b>{fee:.2f} €</b> — оплачиваешь сразу после заявки, без него слот не забронировать\n"
@@ -711,8 +711,8 @@ def admin_card_text(o, tz: ZoneInfo) -> str:
         f"<code>{html.escape(a.get('full_name', ''))}</code>",
         f"Рождение: {_d(a.get('birth'))} · {html.escape(a.get('nationality', ''))}",
         f"Паспорт: <code>{html.escape(a.get('passport', ''))}</code> до {_d(a.get('passport_exp'))}",
-        (f"Тел: <code>{html.escape(a['phone'])}</code> · " if a.get("phone") else "")
-        + f"<code>{html.escape(a.get('email') or '')}</code>",
+        (f"Тел: <code>{html.escape(a['phone'])}</code>" if a.get("phone") else "Тел: —")
+        + (f" · <code>{html.escape(a['email'])}</code>" if a.get("email") else ""),
     ]
     if a.get("gender"):
         lines.insert(6, f"Пол: {'M' if a['gender'] == 'M' else 'F'}")

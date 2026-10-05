@@ -47,5 +47,5 @@ def form_steps(mission: str) -> list[str]:
     steps.append("residence_exp")
     if r.phone:
         steps.append("phone")
-    steps.append("email")
+    # no client email: bookings use the service mailbox, confirmations are delivered through the bot
     return steps
