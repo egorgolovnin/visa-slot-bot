@@ -122,6 +122,23 @@ CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS visa_cases (
+    id           BIGSERIAL PRIMARY KEY,
+    tg_id        BIGINT,
+    order_id     BIGINT,
+    country      TEXT NOT NULL,
+    submitted_on DATE,
+    decided_on   DATE,
+    outcome      TEXT NOT NULL,            -- approved / refused / pending
+    visa_kind    TEXT,                     -- single / multi
+    validity     TEXT,
+    comment      TEXT,
+    publish      BOOLEAN NOT NULL DEFAULT FALSE,
+    status       TEXT NOT NULL DEFAULT 'review',   -- review / published / hidden
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS visa_cases_status ON visa_cases (status);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS case_asked BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS prices (
     mission   TEXT PRIMARY KEY,
     price_eur NUMERIC(10, 2) NOT NULL
@@ -528,3 +545,25 @@ class Database:
     async def event_total(self, kind: str, days: int) -> int:
         return await self.pool.fetchval(
             "SELECT count(*) FROM user_events WHERE kind = $1 AND at > now() - make_interval(days => $2)", kind, days)
+
+    # ---- visa cases ----
+    async def add_case(self, **f) -> int:
+        cols = ", ".join(f)
+        vals = ", ".join(f"${i + 1}" for i in range(len(f)))
+        return await self.pool.fetchval(f"INSERT INTO visa_cases ({cols}) VALUES ({vals}) RETURNING id", *f.values())
+
+    async def case(self, case_id: int):
+        return await self.pool.fetchrow("SELECT * FROM visa_cases WHERE id = $1", case_id)
+
+    async def set_case_status(self, case_id: int, status: str) -> None:
+        await self.pool.execute("UPDATE visa_cases SET status = $2 WHERE id = $1", case_id, status)
+
+    async def published_cases(self) -> list:
+        return await self.pool.fetch(
+            """SELECT country, submitted_on, decided_on, outcome, visa_kind, validity, comment, created_at
+               FROM visa_cases WHERE status = 'published' ORDER BY COALESCE(decided_on, submitted_on, created_at::date) DESC""")
+
+    async def orders_to_ask_case(self) -> list:
+        return await self.pool.fetch(
+            """SELECT id, tg_id, destination, mission, appointment FROM orders
+               WHERE status IN ('paid', 'done') AND NOT case_asked AND appointment IS NOT NULL""")

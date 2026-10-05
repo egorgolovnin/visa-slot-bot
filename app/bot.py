@@ -21,6 +21,8 @@ router = Router()
 USER_COMMANDS = [
     ("order", "Записаться на визу"),
     ("myorders", "Мои заявки и оплата"),
+    ("faq", "Частые вопросы"),
+    ("case", "Поделиться результатом визы"),
     ("support", "Написать в поддержку"),
     ("help", "Как это работает"),
 ]
@@ -54,6 +56,7 @@ HELP = (
     "💸 Сервис — {price} € + сбор визового центра, если он есть. Ниже, чем у конкурентов: мы не вредители, "
     "а помогаторы. За сервис платишь только когда запись уже есть.\n\n"
     "📂 Можем собрать документы на визу полностью за тебя — {docs_price} €. Напиши в /support.\n\n"
+    "📊 Открытая статистика одобрений и сроков: {cases_url}\n\n"
     "<b>Страны</b>\n"
     "Австрия, Бельгия, Венгрия, Германия, Дания, Исландия, Люксембург, Нидерланды, Норвегия, "
     "Словакия, Словения, Финляндия, Хорватия, Чехия, Швеция\n\n"
@@ -88,8 +91,37 @@ def price_str(settings: Settings) -> str:
 
 
 def help_text(settings: Settings, admin: bool = False) -> str:
+    from .web import public_url
+    cases_url = f"{public_url()}/cases" if public_url() else "скоро"
     return (HELP.replace("{price}", price_str(settings)).replace("{docs_price}", f"{settings.docs_price:.0f}")
-            + (ADMIN_HELP if admin else ""))
+            .replace("{cases_url}", cases_url) + (ADMIN_HELP if admin else ""))
+
+
+FAQ = (
+    "<b>Частые вопросы</b>\n\n"
+    "<b>Что от меня нужно?</b>\nЗаполнить заявку в /order (2–3 минуты): страна, даты, данные паспорта. "
+    "И прийти на подачу с документами в назначенное время.\n\n"
+    "<b>Как быстро найдёте слот?</b>\nЗависит от страны, дат и удачи: консульства выпускают слоты в разном количестве, "
+    "а освободившиеся после отмен разбирают за минуты. Мы проверяем все визовые центры каждые 10 минут и записываем сразу, "
+    "как появляется подходящий слот. Гарантировать дату не может никто — слоты выпускает консульство.\n\n"
+    "<b>Нас трое (семья). Сколько слотов нужно?</b>\nОдин человек — один слот, у каждого своё время приёма. "
+    "Оформи заявку на каждого. Хотите в один день — напиши в /support, постараемся.\n\n"
+    "<b>Нужно срочно, на этой неделе</b>\nЕсли консульство выпустит слот на эти даты — запишем. Если нет — "
+    "записать невозможно. Напиши даты как есть, например «ближайшие 2 недели».\n\n"
+    "<b>Насколько забирают паспорт?</b>\nОбычно на 2–3 недели после подачи. Планируй поездку с запасом. "
+    "Реальные сроки по странам — в открытой статистике (ссылка в /help).\n\n"
+    "<b>Как оплата?</b>\nЗа сервис — только после того, как запись сделана и ты получил подтверждение. "
+    "Для Венгрии сбор визового центра оплачивается заранее: мы платим его при брони.\n\n"
+    "<b>Какие документы собрать?</b>\nОфициальные списки пришлём после выбора страны в /order. "
+    "Можем собрать весь пакет за тебя — /support."
+)
+
+
+@router.message(Command("faq"))
+async def faq(message: Message) -> None:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📝 Записаться на визу", callback_data="go:order")
+    await message.answer(FAQ, reply_markup=kb.as_markup())
 
 
 async def setup_commands(bot, settings: Settings) -> None:
@@ -182,7 +214,7 @@ def ago(d: datetime | None, tz: ZoneInfo) -> str:
 
 # ---- start / help ----
 @router.message(CommandStart())
-async def start(message: Message, command: CommandObject, db: Database, settings: Settings,
+async def start(message: Message, command: CommandObject, db: Database, settings: Settings, state: FSMContext,
                 is_new_user: bool = False) -> None:
     u = message.from_user
     admin = is_admin(u.id, settings)
@@ -209,6 +241,10 @@ async def start(message: Message, command: CommandObject, db: Database, settings
     if allowed:
         if admin:
             await setup_commands(message.bot, settings)
+        if source == "case":
+            from .cases import start_case
+            await start_case(message, state)
+            return
         await message.answer(help_text(settings, admin))
     else:
         await message.answer("Привет! Запрос на доступ отправлен, скоро откроем.")
@@ -614,6 +650,7 @@ async def fallback(message: Message) -> None:
         kb.button(text="📝 Записаться на визу", callback_data="go:order")
         kb.button(text="📋 Мои заявки", callback_data="go:myorders")
         kb.button(text="📂 Собрать документы за меня", callback_data="docs:req")
+        kb.button(text="❓ Частые вопросы", callback_data="go:faq")
         kb.button(text="✉️ Поддержка", callback_data="go:support")
         kb.adjust(1)
         await message.answer("Я помогаю записаться на шенгенскую визу с Кипра. Что сделать?", reply_markup=kb.as_markup())
@@ -626,6 +663,8 @@ async def go(call: CallbackQuery, db: Database, poller: Poller, settings: Settin
     if target == "order":
         from .orders import order_start
         await order_start(call.message, state, db, settings, uid=call.from_user.id)
+    elif target == "faq":
+        await call.message.answer(FAQ)
     elif target == "support":
         from .support import ask_question
         await ask_question(call.message, state)

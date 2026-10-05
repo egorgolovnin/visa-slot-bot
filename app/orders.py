@@ -1034,6 +1034,8 @@ async def payment_watcher(bot: Bot, db: Database, settings: Settings, every: int
             if tick % 30 == 1:  # every ~30 min: housekeeping
                 await auto_complete(bot, db, settings)
                 await db.purge_stale_forms(hours=48)
+                from .cases import ask_for_cases
+                await ask_for_cases(bot, db)
             await weekly_slots_report(bot, db, settings)
         except Exception:
             log.exception("payment watcher")

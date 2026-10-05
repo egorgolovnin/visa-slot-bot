@@ -22,6 +22,7 @@ from .db import Database
 
 log = logging.getLogger("web")
 PAGE = Path(__file__).with_name("panel.html")
+CASES_PAGE = Path(__file__).with_name("cases.html")
 
 
 def public_url() -> str | None:
@@ -136,6 +137,47 @@ async def collect(db: Database, settings: Settings, poller) -> dict:
     }
 
 
+async def cases_data(db: Database) -> dict:
+    """Public, anonymous statistics from moderated cases. No names, no contacts, no exact dates."""
+    import statistics
+    rows = await db.pool.fetch(
+        """SELECT country, submitted_on, decided_on, outcome, visa_kind, comment, publish FROM visa_cases
+           WHERE status = 'published' ORDER BY COALESCE(decided_on, submitted_on, created_at::date) DESC""")
+    def days(r):
+        return (r["decided_on"] - r["submitted_on"]).days if r["decided_on"] and r["submitted_on"] else None
+    decided = [r for r in rows if r["outcome"] in ("approved", "refused")]
+    approved = [r for r in decided if r["outcome"] == "approved"]
+    all_days = [d for d in (days(r) for r in decided) if d is not None and 0 <= d <= 180]
+    by_country: dict[str, dict] = {}
+    for r in rows:
+        c = by_country.setdefault(r["country"], {"country": r["country"], "total": 0, "approved": 0, "refused": 0,
+                                                 "pending": 0, "days": []})
+        c["total"] += 1
+        c[r["outcome"]] += 1
+        if days(r) is not None and r["outcome"] != "pending":
+            c["days"].append(days(r))
+    countries = []
+    for c in sorted(by_country.values(), key=lambda x: -x["total"]):
+        dec = c["approved"] + c["refused"]
+        countries.append({"country": c["country"], "total": c["total"], "approved": c["approved"],
+                          "refused": c["refused"], "pending": c["pending"],
+                          "rate": round(100 * c["approved"] / dec) if dec else None,
+                          "median_days": round(statistics.median(c["days"])) if c["days"] else None})
+    dates = [r["submitted_on"] for r in rows if r["submitted_on"]]
+    return {
+        "total": len(rows), "decided": len(decided),
+        "rate": round(100 * len(approved) / len(decided)) if decided else None,
+        "median_days": round(statistics.median(all_days)) if all_days else None,
+        "countries_count": len(by_country),
+        "since": min(dates).strftime("%Y-%m") if dates else None,
+        "countries": countries,
+        "cases": [{"country": r["country"], "month": r["submitted_on"].strftime("%Y-%m") if r["submitted_on"] else None,
+                   "outcome": r["outcome"], "days": days(r), "visa_kind": r["visa_kind"],
+                   "comment": r["comment"] if r["publish"] else None} for r in rows[:60]],
+        "bot": os.getenv("BOT_USERNAME", "Easyvisaforyoubot"),
+    }
+
+
 def make_app(db: Database, settings: Settings, poller) -> web.Application:
     app = web.Application()
 
@@ -156,8 +198,18 @@ def make_app(db: Database, settings: Settings, poller) -> web.Application:
         return web.Response(text="ok")
 
     async def robots(_: web.Request) -> web.Response:
-        return web.Response(text="User-agent: *\nDisallow: /\n")
+        return web.Response(text="User-agent: *\nAllow: /cases\nDisallow: /\n")
 
+    async def cases_page(_: web.Request) -> web.Response:
+        return web.Response(text=CASES_PAGE.read_text(encoding="utf-8"), content_type="text/html",
+                            headers={"Cache-Control": "public, max-age=300"})
+
+    async def cases_api(_: web.Request) -> web.Response:
+        return web.json_response(await cases_data(db), headers={"Cache-Control": "public, max-age=300"},
+                                 dumps=lambda o: json.dumps(o, ensure_ascii=False, default=str))
+
+    app.router.add_get("/cases", cases_page)
+    app.router.add_get("/api/cases", cases_api)
     app.router.add_get("/", health)
     app.router.add_get("/robots.txt", robots)
     app.router.add_get("/panel", page)
