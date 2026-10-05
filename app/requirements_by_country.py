@@ -16,6 +16,7 @@ class Requirements:
     gender: bool            # booking form asks for gender
     passport_scan: bool     # booking form requires the passport bio page upload
     system: str
+    phone: bool = True      # booking form requires a phone number (VFS does)
 
 
 VFS = "VFS Global"
@@ -25,8 +26,8 @@ REQUIREMENTS: dict[str, Requirements] = {
     "svk": Requirements(40.00, gender=True, passport_scan=False, system=VFS),
     "fin": Requirements(0.0, gender=True, passport_scan=False, system=VFS),
     "hrv": Requirements(0.0, gender=True, passport_scan=False, system=VFS),
-    "deu": Requirements(0.0, gender=False, passport_scan=False, system="посольство Германии"),
-    "grc": Requirements(0.0, gender=False, passport_scan=False, system="посольство Греции"),
+    "deu": Requirements(0.0, gender=False, passport_scan=False, system="посольство Германии", phone=False),
+    "grc": Requirements(0.0, gender=False, passport_scan=False, system="посольство Греции", phone=False),
 }
 DEFAULT = Requirements(0.0, gender=True, passport_scan=False, system=VFS)
 
@@ -43,5 +44,8 @@ def form_steps(mission: str) -> list[str]:
     steps += ["birth", "nationality", "passport", "passport_exp"]
     if r.passport_scan:
         steps.append("passport_scan")
-    steps += ["residence_exp", "phone", "email"]
+    steps.append("residence_exp")
+    if r.phone:
+        steps.append("phone")
+    steps.append("email")
     return steps

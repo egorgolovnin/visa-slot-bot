@@ -92,7 +92,8 @@ QUESTIONS = {
                       "Фото должно быть чётким, все поля читаются. Файл видят только сотрудники сервиса."),
     "residence_exp": ("До какого числа действует твой <b>ВНЖ Кипра</b>? Например <code>15.08.2027</code>\n"
                       "Визу дают только если ВНЖ действует минимум 3 месяца после возвращения из поездки."),
-    "phone": "Телефон для связи, например <code>+35799123456</code>",
+    "phone": ("Номер телефона — его обязательно требует визовый центр в форме записи. "
+              "Например <code>+35799123456</code>.\nСвязываться с тобой будем здесь, в Telegram."),
     "email": "Email — на него придёт подтверждение записи:",
 }
 NOT_A_COMMAND = ~F.text.startswith("/")
@@ -202,7 +203,8 @@ async def order_destination(call: CallbackQuery, state: FSMContext, db: Database
         await call.answer()
         return
     await state.clear()
-    await state.update_data(mission=mission, destination=key, mission_name=name, note=note)
+    tg = f"@{call.from_user.username}" if call.from_user.username else None
+    await state.update_data(mission=mission, destination=key, mission_name=name, note=note, tg_contact=tg)
     await call.message.edit_text(f"Страна: <b>{name}</b> ({note})")
     await call.answer()
     from .documents import links_html
@@ -494,7 +496,10 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
         + (f"ВНЖ до: {fmt_date(date.fromisoformat(data['residence_exp']))}\n" if data.get("residence_exp")
            else ("ВНЖ: на продлении (ресипт)\n" if data.get("residence_receipt") else ""))
         + ("Скан паспорта: получен ✓\n" if data.get("passport_scan") else "")
-        + f"Телефон: {html.escape(data['phone'])}\nEmail: {html.escape(data['email'])}\n\n"
+        + (f"Телефон (для визового центра): {html.escape(data['phone'])}\n" if data.get("phone") else "")
+        + f"Email: {html.escape(data['email'])}\n"
+        + (f"Связь: Telegram {html.escape(data['tg_contact'])} — пишем сюда, в этот чат\n\n" if data.get("tg_contact")
+           else "Связь: пишем сюда, в этот чат\n\n")
         + (f"💳 Сбор визового центра: <b>{fee:.2f} €</b> — оплачиваешь сразу после заявки, без него слот не забронировать\n"
            f"🤝 Наш сервис: <b>{price:.0f} €</b> — после брони\n"
            f"Итого: <b>{fee + price:.2f} €</b>\n\n" if fee else
@@ -510,7 +515,7 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
     await message.answer(text, reply_markup=kb.as_markup())
 
 
-EDIT_LABELS = {"window": "Даты", "full_name": "Имя", "gender": "Пол", "birth": "Дата рождения",
+EDIT_LABELS = {"window": "Даты", "full_name": "Имя", "gender": "Пол", "birth": "Дата рождения",  # noqa
                "nationality": "Гражданство", "passport": "Номер паспорта", "passport_exp": "Срок паспорта",
                "passport_scan": "Скан паспорта", "residence_exp": "ВНЖ", "phone": "Телефон", "email": "Email"}
 
@@ -565,7 +570,8 @@ async def _order_confirm(call: CallbackQuery, state: FSMContext, db: Database, s
         await call.answer()
         return
     applicant = {k: data.get(k) for k in ("full_name", "gender", "birth", "nationality", "passport", "passport_exp",
-                                          "passport_scan", "residence_exp", "residence_receipt", "phone", "email")}
+                                          "passport_scan", "residence_exp", "residence_receipt", "phone", "email",
+                                          "tg_contact")}
     d_from = date.fromisoformat(data["date_from"]) if data.get("date_from") else None
     d_to = date.fromisoformat(data["date_to"]) if data.get("date_to") else None
     fee = await db.fee(data["mission"])
@@ -705,7 +711,8 @@ def admin_card_text(o, tz: ZoneInfo) -> str:
         f"<code>{html.escape(a.get('full_name', ''))}</code>",
         f"Рождение: {_d(a.get('birth'))} · {html.escape(a.get('nationality', ''))}",
         f"Паспорт: <code>{html.escape(a.get('passport', ''))}</code> до {_d(a.get('passport_exp'))}",
-        f"Тел: <code>{html.escape(a.get('phone') or '')}</code> · <code>{html.escape(a.get('email') or '')}</code>",
+        (f"Тел: <code>{html.escape(a['phone'])}</code> · " if a.get("phone") else "")
+        + f"<code>{html.escape(a.get('email') or '')}</code>",
     ]
     if a.get("gender"):
         lines.insert(6, f"Пол: {'M' if a['gender'] == 'M' else 'F'}")
