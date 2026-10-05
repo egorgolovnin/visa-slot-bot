@@ -264,6 +264,13 @@ class Poller:
             await self.probe_vfs_fields()
         except Exception:
             log.exception("vfs fields probe")
+        try:
+            if await self.db.kv_get("visarea_probe") != "v1":
+                await self.db.kv_set("visarea_probe", "v1")
+                from .competitor import probe
+                await probe()
+        except Exception:
+            log.exception("visarea probe")
         last_discover = await self.db.last_discovery()
         if last_discover is None:
             await self.alert_admins("🔎 Первая разведка завершена.\n" + await self.discover())
