@@ -25,6 +25,7 @@ class Requirements:
     passport_exp: bool = True
     online_payment: bool = False   # VFS payOnlineEnabled
     at_centre: str = ""            # what the client pays himself on the appointment day
+    reference: bool = False        # VFS enableReferenceNumber (France in UAE: France-Visas number)
 
 
 VFS = "VFS Global"
@@ -40,6 +41,16 @@ REQUIREMENTS: dict[str, Requirements] = {
                         online_payment=True, at_centre="консульский сбор 90 € + сервисный сбор VFS 20 €"),
     "hrv": Requirements(0.0, gender=True, passport_scan=False, system=VFS, online_payment=True,
                         at_centre="консульский сбор 90 € + сервисный сбор VFS 31 €"),
+    # VFS centres abroad (form config from /configuration/fields, 05.10.2026)
+    "are-fra": Requirements(0.0, gender=False, passport_scan=False, system=VFS, birth=False, passport_exp=False,
+                            online_payment=True, reference=True,
+                            at_centre="консульский сбор и сервисный сбор VFS по прайсу визового центра"),
+    "are-ita": Requirements(0.0, gender=False, passport_scan=False, system=VFS, birth=False, passport_exp=False,
+                            online_payment=True, at_centre="консульский сбор и сервисный сбор VFS по прайсу визового центра"),
+    "are-deu": Requirements(0.0, gender=False, passport_scan=False, system=VFS, birth=False, passport_exp=False,
+                            online_payment=True, at_centre="консульский сбор и сервисный сбор VFS по прайсу визового центра"),
+    "srb-hrv": Requirements(0.0, gender=True, passport_scan=False, system=VFS, online_payment=False,
+                            at_centre="консульский сбор и сервисный сбор VFS по прайсу визового центра"),
     "deu": Requirements(0.0, gender=False, passport_scan=False, system="посольство Германии", phone=False,
                         at_centre="консульский сбор 90 €"),
     "grc": Requirements(0.0, gender=False, passport_scan=False, system="посольство Греции", phone=False),
@@ -59,6 +70,8 @@ def form_steps(mission: str) -> list[str]:
     if r.birth:
         steps.append("birth")
     steps += ["nationality", "passport"]
+    if r.reference:
+        steps.append("reference")
     if r.passport_exp:
         steps.append("passport_exp")
     if r.passport_scan:

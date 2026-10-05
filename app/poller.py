@@ -146,6 +146,8 @@ class Poller:
         for code, name in missions:
             if code in RK_MISSIONS and self.rk_resume_at and now < self.rk_resume_at:
                 continue
+            if code.startswith("are-") and not self.s.proxy_url:
+                continue  # VFS UAE refuses datacenter IPs: orders are taken, slots are watched once a proxy is set
             is_vfs = code not in RK_MISSIONS and code not in SS_MISSIONS
             if is_vfs and vfs_paused:
                 continue

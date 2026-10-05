@@ -48,6 +48,7 @@ class NewOrder(StatesGroup):
     nationality = State()
     passport = State()
     passport_exp = State()
+    reference = State()
     passport_scan = State()
     residence_exp = State()
     phone = State()
@@ -57,6 +58,16 @@ class NewOrder(StatesGroup):
 
 class Booking(StatesGroup):
     details = State()
+
+
+# where the client applies from (the country whose residence permit they hold)
+REGIONS = {"cy": ("🇨🇾 Кипр", "ВНЖ Кипра"), "ae": ("🇦🇪 ОАЭ", "резидентская виза ОАЭ (Emirates ID)"),
+           "rs": ("🇷🇸 Сербия", "ВНЖ Сербии")}
+DEST_REGION = {"ae_fra": "ae", "ae_ita": "ae", "ae_deu": "ae", "rs_hrv": "rs"}  # everything else is Cyprus
+
+
+def region_of(key: str) -> str:
+    return DEST_REGION.get(key, "cy")
 
 
 # destination country -> (name, mission that handles it, note shown to the client)
@@ -76,6 +87,10 @@ DESTINATIONS: dict[str, tuple[str, str, str]] = {
     "nor": ("Норвегия", "deu", "подача в посольстве Германии"),
     "isl": ("Исландия", "deu", "подача в посольстве Германии"),
     "lux": ("Люксембург", "deu", "подача в посольстве Германии"),
+    "ae_fra": ("Франция", "are-fra", "VFS Global, Абу-Даби"),
+    "ae_ita": ("Италия", "are-ita", "VFS Global, Дубай"),
+    "ae_deu": ("Германия", "are-deu", "VFS Global, Дубай"),
+    "rs_hrv": ("Хорватия", "srb-hrv", "VFS Global, Белград"),
     "grc": ("Греция", "grc", "посольство Греции, Никосия"),
     "mlt": ("Мальта", "grc", "подача в посольстве Греции"),
 }
@@ -96,7 +111,9 @@ QUESTIONS = {
     "gender": "Пол (как в паспорте):",
     "passport_scan": ("Пришли <b>фото разворота паспорта с фотографией</b> — его требует визовый центр при записи. "
                       "Фото должно быть чётким, все поля читаются. Файл видят только сотрудники сервиса."),
-    "residence_exp": ("До какого числа действует твой <b>ВНЖ Кипра</b>? Например <code>15.08.2027</code>\n"
+    "reference": ("Номер заявки <b>France-Visas</b> — начинается с FRA, например <code>FRA1234567890123</code>.\n"
+                  "Его выдают после заполнения анкеты на france-visas.gouv.fr — визовый центр без него не запишет."),
+    "residence_exp": ("До какого числа действует твой <b>{permit}</b>? Например <code>15.08.2027</code>\n"
                       "Визу дают только если ВНЖ действует минимум 3 месяца после возвращения из поездки."),
     "phone": ("Номер телефона — его обязательно требует визовый центр в форме записи. "
               "Например <code>+35799123456</code>.\nСвязываться с тобой будем здесь, в Telegram."),
@@ -144,7 +161,8 @@ async def ask(message: Message, state: FSMContext, step: str, prefix: str = "") 
         prefix = f"👤 <b>Человек {data.get('pi', 0) + 1} из {n}.</b> " + prefix
     await state.set_state(getattr(NewOrder, step))
     kb = nationality_kb([]) if step == "nationality" else step_kb(step)
-    await message.answer(prefix + QUESTIONS[step], reply_markup=kb)
+    question = QUESTIONS[step].replace("{permit}", REGIONS[data.get("region", "cy")][1])
+    await message.answer(prefix + question, reply_markup=kb)
 
 
 async def next_step(message: Message, state: FSMContext, current: str, db: Database, settings: Settings) -> None:
@@ -213,8 +231,8 @@ def _duplicate_passport(people: list[dict]) -> str | None:
     return None
 
 
-PERSONAL_KEYS = ("full_name", "gender", "birth", "nationality", "passport", "passport_exp", "passport_scan",
-                 "residence_exp", "residence_receipt")
+PERSONAL_KEYS = ("full_name", "gender", "birth", "nationality", "passport", "passport_exp", "reference",
+                 "passport_scan", "residence_exp", "residence_receipt")
 MAX_PEOPLE = 5  # VFS noOfMaxAllowedApplicant
 
 
@@ -272,18 +290,44 @@ async def order_start(message: Message, state: FSMContext, db: Database, setting
         await message.answer(reason)
         return
     offered = {c for c, _ in await db.offered_missions()}
+    from .documents import PROCESS
+    await message.answer(PROCESS.format(price=f"{settings.default_price:.0f}", docs_price=f"{settings.docs_price:.0f}"))
+    regions = sorted({region_of(k) for k, (_, m, _) in DESTINATIONS.items() if m in offered},
+                     key=lambda r: list(REGIONS).index(r))
+    if len(regions) > 1:
+        kb = InlineKeyboardBuilder()
+        for r in regions:
+            kb.button(text=REGIONS[r][0], callback_data=f"ord:r:{r}")
+        kb.button(text="✖️ Отмена", callback_data="ord:cancel")
+        kb.adjust(len(regions), 1)
+        await message.answer("<b>Где подаёшь документы?</b> Это страна, где у тебя ВНЖ.", reply_markup=kb.as_markup())
+        return
+    await send_destinations(message, db, settings, uid, "cy")
+
+
+@router.callback_query(F.data.startswith("ord:r:"))
+async def order_region(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
+    region = call.data.split(":")[2]
+    await call.answer()
+    try:
+        await call.message.edit_text(f"Подача: <b>{REGIONS.get(region, ('?',))[0]}</b>")
+    except Exception:
+        pass
+    await send_destinations(call.message, db, settings, call.from_user.id, region)
+
+
+async def send_destinations(message: Message, db: Database, settings: Settings, uid: int, region: str) -> None:
+    offered = {c for c, _ in await db.offered_missions()}
     taken = set() if is_admin(uid, settings) else await db.open_order_missions(uid)
     kb = InlineKeyboardBuilder()
     n = 0
     for key, (name, mission, _) in sorted(DESTINATIONS.items(), key=lambda kv: kv[1][0]):
-        if mission in offered and mission not in taken:
+        if mission in offered and mission not in taken and region_of(key) == region:
             kb.button(text=name, callback_data=f"ord:d:{key}")
             n += 1
     kb.button(text=f"📂 Собрать документы за меня — {settings.docs_price:.0f} €", callback_data="docs:req")
     kb.button(text="✖️ Отмена", callback_data="ord:cancel")
     kb.adjust(*([2] * (n // 2)), *([1] if n % 2 else []), 1, 1)  # countries in pairs, then two wide buttons
-    from .documents import PROCESS
-    await message.answer(PROCESS.format(price=f"{settings.default_price:.0f}", docs_price=f"{settings.docs_price:.0f}"))
     await message.answer("<b>Заявка на запись</b>\nВ какую страну едешь (основная страна поездки)?",
                          reply_markup=kb.as_markup())
 
@@ -302,7 +346,8 @@ async def order_destination(call: CallbackQuery, state: FSMContext, db: Database
         return
     await state.clear()
     tg = f"@{call.from_user.username}" if call.from_user.username else None
-    await state.update_data(mission=mission, destination=key, mission_name=name, note=note, tg_contact=tg)
+    await state.update_data(mission=mission, destination=key, mission_name=name, note=note, tg_contact=tg,
+                            region=region_of(key))
     await call.message.edit_text(f"Страна: <b>{name}</b> ({note})")
     await call.answer()
     from .documents import links_html
@@ -577,6 +622,17 @@ async def order_passport_scan(message: Message, state: FSMContext, db: Database,
     await next_step(message, state, "passport_scan", db, settings)
 
 
+@router.message(NewOrder.reference, F.text, NOT_A_COMMAND)
+async def order_reference(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
+    ref = re.sub(r"\s+", "", message.text.strip().upper())
+    if not re.fullmatch(r"FRA\d{14}", ref):
+        await message.answer("Номер France-Visas выглядит так: FRA и 14 цифр, например <code>FRA1234567890123</code>. "
+                             "Проверь в письме от France-Visas.", reply_markup=step_kb("reference"))
+        return
+    await state.update_data(reference=ref)
+    await next_step(message, state, "reference", db, settings)
+
+
 @router.message(NewOrder.residence_exp, F.text, NOT_A_COMMAND)
 async def order_residence(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
     d = parse_d(message.text)
@@ -638,6 +694,7 @@ def person_lines(p: dict, numbered: int | None = None) -> str:
             + f"Гражданство: {html.escape(p.get('nationality') or '')}\n"
             + f"Паспорт: {html.escape(p.get('passport') or '')}"
             + (f" до {fmt_date(date.fromisoformat(p['passport_exp']))}" if p.get("passport_exp") else "") + "\n"
+            + (f"France-Visas: {html.escape(p['reference'])}\n" if p.get("reference") else "")
             + (f"Пол: {'мужской' if p.get('gender') == 'M' else 'женский'}\n" if p.get("gender") else "")
             + (f"ВНЖ до: {fmt_date(date.fromisoformat(p['residence_exp']))}\n" if p.get("residence_exp")
                else ("ВНЖ: на продлении (ресипт)\n" if p.get("residence_receipt") else "")))
@@ -683,7 +740,7 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
     await message.answer(text, reply_markup=kb.as_markup())
 
 
-EDIT_LABELS = {"window": "Даты", "full_name": "Имя", "gender": "Пол", "birth": "Дата рождения",  # noqa
+EDIT_LABELS = {"reference": "Номер France-Visas", "window": "Даты", "full_name": "Имя", "gender": "Пол", "birth": "Дата рождения",  # noqa
                "nationality": "Гражданство", "passport": "Номер паспорта", "passport_exp": "Срок паспорта",
                "passport_scan": "Скан паспорта", "residence_exp": "ВНЖ", "phone": "Телефон", "email": "Email"}
 
@@ -923,6 +980,8 @@ def admin_card_text(o, tz: ZoneInfo) -> str:
             f"рожд. {_d(p.get('birth'))}" if p.get("birth") else "", html.escape(p.get("nationality") or "")] if x))
         lines.append(f"Паспорт: <code>{html.escape(p.get('passport') or '')}</code>"
                      + (f" до {_d(p.get('passport_exp'))}" if p.get("passport_exp") else ""))
+        if p.get("reference"):
+            lines.append(f"France-Visas: <code>{html.escape(p['reference'])}</code>")
         if p.get("residence_exp") or p.get("residence_receipt"):
             lines.append(f"ВНЖ: до {_d(p['residence_exp'])}" if p.get("residence_exp") else "ВНЖ: ⚠️ на продлении (ресипт)")
     lines.append("")

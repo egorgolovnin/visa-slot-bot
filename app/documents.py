@@ -19,6 +19,12 @@ DOC_LINKS: dict[str, list[tuple[str, str]]] = {
     "hrv": [("Документы и сборы (VFS)", "https://visa.vfsglobal.com/one-pager/croatia/cyprus/english/"),
             ("Онлайн-анкета на визу (МИД Хорватии)", "https://crovisa.mvep.hr")],
     "deu": [("Шенгенская виза: документы и правила (посольство Германии)", "https://nikosia.diplo.de/cy-en/service/1672100-1672100")],
+    "are-fra": [("Анкета France-Visas (сначала она, потом запись)", "https://france-visas.gouv.fr"),
+                ("Визовый центр Франции в ОАЭ (VFS)", "https://visa.vfsglobal.com/are/en/fra")],
+    "are-ita": [("Визовый центр Италии в ОАЭ (VFS)", "https://visa.vfsglobal.com/are/en/ita")],
+    "are-deu": [("Визовый центр Германии в ОАЭ (VFS)", "https://visa.vfsglobal.com/are/en/deu")],
+    "srb-hrv": [("Визовый центр Хорватии в Сербии (VFS)", "https://visa.vfsglobal.com/srb/en/hrv"),
+                ("Онлайн-анкета на визу (МИД Хорватии)", "https://crovisa.mvep.hr")],
 }
 # destination-specific extras (countries whose visas the German embassy issues)
 DESTINATION_EXTRA: dict[str, list[tuple[str, str]]] = {
