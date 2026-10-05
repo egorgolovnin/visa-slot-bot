@@ -211,26 +211,21 @@ class Poller:
             self._last_alert[key] = now
             head = "🟢 Появился слот" if ch.kind == OPENED else "⏫ Слот стал раньше"
             was = f" (было {fmt_date(ch.old)})" if ch.kind == EARLIER else ""
+            waiting = [o for o in await self.db.active_orders_for(code)
+                       if (o["date_from"] is None or o["date_from"] <= ch.slot.earliest)
+                       and (o["date_to"] is None or ch.slot.earliest <= o["date_to"])]
+            ids = ", ".join(f"#{o['id']}" for o in waiting)
+            orders_line = f"\n\n<b>Подходит заявкам: {ids}</b> → /orders" if waiting else "\n\nПодходящих заявок нет."
             text = (
                 f"{head}: <b>{html.escape(name)}</b>\n"
                 f"Центр: {html.escape(ch.slot.centre)}\n"
                 f"Категория: {html.escape(ch.slot.category)}\n"
                 f"Ближайшая дата: <b>{fmt_date(ch.slot.earliest)}</b>{was}\n"
                 f"Данные от: {html.escape(updated or '—')}\n"
-                f"{self.page_url(code)}"
+                f"{self.page_url(code)}{orders_line}"
             )
-            sent = 0
-            for uid in await self.db.subscribers(code, ch.slot.earliest):
-                if await self.notify(uid, text):
-                    sent += 1
-                    await self.db.log_event(uid, "alert", f"{code} {ch.kind} {ch.slot.earliest}")
-            log.info("alert %s %s %s -> %d users", code, ch.kind, ch.slot.earliest, sent)
-            waiting = [o for o in await self.db.active_orders_for(code)
-                       if (o["date_from"] is None or o["date_from"] <= ch.slot.earliest)
-                       and (o["date_to"] is None or ch.slot.earliest <= o["date_to"])]
-            if waiting:
-                ids = ", ".join(f"#{o['id']}" for o in waiting)
-                await self.alert_admins(f"⚡ {text}\n\n<b>Подходит заявкам: {ids}</b> → /orders")
+            await self.alert_admins(("⚡ " if waiting else "") + text)
+            log.info("alert %s %s %s -> admins, %d matching orders", code, ch.kind, ch.slot.earliest, len(waiting))
 
     def wake(self) -> None:
         self._wake.set()

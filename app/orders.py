@@ -409,9 +409,6 @@ async def order_confirm(call: CallbackQuery, state: FSMContext, db: Database, se
     d_to = date.fromisoformat(data["date_to"]) if data.get("date_to") else None
     order_id = await db.create_order(call.from_user.id, data["mission"], d_from, d_to, security.encrypt(applicant),
                                      destination=data.get("destination"))
-    subs = {r["mission"] for r in await db.user_subs(call.from_user.id)}
-    if data["mission"] not in subs:
-        await db.toggle_sub(call.from_user.id, data["mission"])
     await db.log_event(call.from_user.id, "order_new", f"#{order_id} {data.get('destination')}")
     await call.message.edit_text(
         f"✅ Заявка <b>#{order_id}</b> принята: {html.escape(data['mission_name'])}.\n"
@@ -436,8 +433,8 @@ async def order_unexpected(message: Message, state: FSMContext) -> None:
 
 # ---------------- client: my orders ----------------
 @router.message(Command("myorders"))
-async def my_orders(message: Message, db: Database) -> None:
-    rows = await db.orders_list(tuple(STATUS), tg_id=message.from_user.id, limit=10)
+async def my_orders(message: Message, db: Database, uid: int | None = None) -> None:
+    rows = await db.orders_list(tuple(STATUS), tg_id=uid or message.from_user.id, limit=10)
     if not rows:
         await message.answer("Заявок нет. Оформить — /order")
         return

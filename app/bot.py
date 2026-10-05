@@ -19,17 +19,15 @@ from .poller import Poller, fmt_date
 router = Router()
 
 USER_COMMANDS = [
-    ("order", "Заявка: забронируем слот за тебя"),
+    ("order", "Записаться на визу"),
     ("myorders", "Мои заявки и оплата"),
-    ("sub", "Выбрать страны для уведомлений"),
-    ("mysubs", "Мои подписки"),
-    ("history", "История по стране: /history hun"),
-    ("help", "Что умеет бот"),
+    ("help", "Как это работает"),
 ]
 ADMIN_COMMANDS = [
     ("admin", "Панель админа"),
     ("orders", "Открытые заявки"),
     ("status", "Ближайшие даты сейчас"),
+    ("history", "История слотов: /history hun"),
     ("price", "Цены: /price hun 120"),
     ("users", "Пользователи"),
     ("user", "Карточка: /user ID"),
@@ -42,18 +40,19 @@ ADMIN_COMMANDS = [
 ]
 
 HELP = (
-    "Я слежу за слотами на шенгенские визы с Кипра и пишу, когда появляется дата.\n\n"
-    "<b>Что отслеживается</b>\n"
+    "Помогаю получить запись на шенгенскую визу с Кипра — бронируем слот за тебя.\n\n"
+    "<b>Как это работает</b>\n"
+    "1. /order — выбираешь страну, даты и отправляешь данные паспорта\n"
+    "2. Мы ловим свободный слот и записываем тебя\n"
+    "3. Присылаем подтверждение записи — ты оплачиваешь сервис в крипте\n\n"
+    "<b>Страны</b>\n"
     "Австрия, Бельгия, Венгрия, Германия, Дания, Исландия, Люксембург, Нидерланды, Норвегия, "
     "Словакия, Финляндия, Хорватия\n\n"
     "<b>Запишись напрямую</b>\n"
     "• Франция: заявка на demarche.numerique.gouv.fr → «Demande de rendez-vous visas - Chypre»\n"
     "• Испания: письмо на emb.nicosia.sc@maec.es, тема CITA PREVIA\n"
-    "• Италия: prenotami.esteri.it (мониторинг в работе)\n\n"
-    "<b>Запись под ключ</b>\n"
-    "/order — оставь заявку, мы поймаем и забронируем слот на твои данные. Оплата в крипте — только после брони.\n\n"
-    "<b>Команды</b>\n" + "\n".join(f"/{c} — {d}" for c, d in USER_COMMANDS) + "\n\n"
-    "Записываем мы сами — по твоим данным из заявки. Тебе останется только прийти на подачу."
+    "• Италия: prenotami.esteri.it\n\n"
+    "<b>Команды</b>\n" + "\n".join(f"/{c} — {d}" for c, d in USER_COMMANDS)
 )
 ADMIN_HELP = "\n\n<b>Админ</b>\n" + "\n".join(f"/{c} — {d}" for c, d in ADMIN_COMMANDS)
 MAX_LEN = 3800
@@ -64,13 +63,14 @@ def is_admin(uid: int, settings: Settings) -> bool:
 
 
 DESCRIPTION = (
-    "Помогаю получить запись на шенгенскую визу с Кипра.\n\n"
-    "🔔 Слежу за свободными датами в 12 странах: Австрия, Венгрия, Словакия, Финляндия, Хорватия, "
-    "Германия, Нидерланды, Бельгия, Дания, Норвегия, Исландия, Люксембург — и пишу, как только появится слот.\n\n"
-    "📝 Могу забронировать запись за тебя. Оплата — только после брони.\n\n"
+    "Запись на шенгенскую визу с Кипра под ключ.\n\n"
+    "Выбираешь страну и даты, отправляешь данные — мы ловим свободный слот и записываем тебя. "
+    "Оплата только после брони.\n\n"
+    "12 стран: Австрия, Бельгия, Венгрия, Германия, Дания, Исландия, Люксембург, Нидерланды, Норвегия, "
+    "Словакия, Финляндия, Хорватия.\n\n"
     "Нажми «Старт», чтобы начать."
 )
-SHORT_DESCRIPTION = "Слоты на шенгенские визы с Кипра: уведомления о свободных датах и запись под ключ."
+SHORT_DESCRIPTION = "Запись на шенгенскую визу с Кипра под ключ. Оплата только после брони."
 
 
 async def setup_commands(bot, settings: Settings) -> None:
@@ -200,50 +200,6 @@ async def help_(message: Message, settings: Settings) -> None:
     await message.answer(HELP + (ADMIN_HELP if is_admin(message.from_user.id, settings) else ""))
 
 
-# ---- subscriptions ----
-async def sub_keyboard(db: Database, uid: int):
-    subs = {r["mission"] for r in await db.user_subs(uid)}
-    kb = InlineKeyboardBuilder()
-    for code, name in await db.offered_missions():
-        kb.button(text=("✅ " if code in subs else "") + name, callback_data=f"sub:{code}")
-    kb.adjust(2)
-    return kb.as_markup()
-
-
-@router.message(Command("sub"))
-async def sub(message: Message, db: Database) -> None:
-    if not await db.offered_missions():
-        await message.answer("Список стран ещё не собран, бот проводит разведку. Попробуй через пару минут.")
-        return
-    await message.answer("Выбери страны для уведомлений:", reply_markup=await sub_keyboard(db, message.from_user.id))
-
-
-@router.callback_query(F.data.startswith("sub:"))
-async def sub_toggle(call: CallbackQuery, db: Database, poller: Poller, settings: Settings) -> None:
-    code = call.data.split(":", 1)[1]
-    on = await db.toggle_sub(call.from_user.id, code)
-    name = await db.mission_name(code) or code
-    await call.message.edit_reply_markup(reply_markup=await sub_keyboard(db, call.from_user.id))
-    await call.answer(f"{name}: {'подписка включена' if on else 'подписка выключена'}")
-    await db.log_event(call.from_user.id, "sub_on" if on else "sub_off", code)
-    if on:
-        await call.message.answer(f"✅ {html.escape(name)}: подписка включена. Напишу, как только появится слот.\n"
-                                  "Хочешь, чтобы мы записали тебя сами — оставь заявку: /order")
-
-
-@router.message(Command("mysubs"))
-async def mysubs(message: Message, db: Database) -> None:
-    rows = await db.user_subs(message.from_user.id)
-    if not rows:
-        await message.answer("Подписок нет. Выбери страны через /sub.")
-        return
-    lines = ["<b>Мои подписки</b>"]
-    for r in rows:
-        name = await db.mission_name(r["mission"]) or r["mission"]
-        lines.append(f"• {html.escape(name)}")
-    await message.answer("\n".join(lines))
-
-
 # ---- views ----
 def mission_lines(rows, tz: ZoneInfo, poller: Poller) -> list[str]:
     if not rows:
@@ -287,6 +243,9 @@ async def status(message: Message, db: Database, poller: Poller, settings: Setti
 
 @router.message(Command("history"))
 async def history(message: Message, command: CommandObject, db: Database, settings: Settings) -> None:
+    if not is_admin(message.from_user.id, settings):
+        await message.answer("Такой команды нет. Список команд — /help")
+        return
     code = (command.args or "").strip().lower()
     if not code:
         await message.answer("Формат: /history hun")
@@ -323,12 +282,11 @@ async def dashboard_text(db: Database) -> str:
     lines = [
         "<b>Панель админа</b>",
         "",
-        f"👥 Пользователей: <b>{u['total']}</b> (с подписками: {u['with_subs']})",
+        f"👥 Пользователей: <b>{u['total']}</b> (оставили заявку: {u['with_orders']})",
         f"🆕 Новых: {u['new_1d']} за сутки · {u['new_7d']} за 7 дн · {u['new_30d']} за 30 дн",
         f"🔥 Активных: {u['active_1d']} за сутки · {u['active_7d']} за 7 дн",
         f"🚫 Забанено: {u['banned']} · заблокировали бота: {u['blocked_bot']}"
         + (f" · ждут доступа: {u['pending']}" if u["pending"] else ""),
-        f"🔔 Алертов отправлено: {await db.alerts_sent(1)} за сутки · {await db.alerts_sent(7)} за 7 дн",
         "",
         "<b>Заявки</b>",
         f"🆕 {o['new']} новых · 🔎 {o['in_progress']} в работе · 📅 {o['booked']} ждут оплаты · 💰 {o['paid']} оплачено",
@@ -338,9 +296,13 @@ async def dashboard_text(db: Database) -> str:
     ]
     for r in await db.top_sources():
         lines.append(f"• {html.escape(r['source'])}: {r['n']} (+{r['n_7d']} за 7 дн)")
-    lines += ["", "<b>Подписки по странам</b>"]
-    for r in await db.subs_by_mission():
-        lines.append(f"• {html.escape(r['name'])}: {r['n']}")
+    by_dest = await db.orders_by_destination()
+    if by_dest:
+        from .orders import DESTINATIONS
+        lines += ["", "<b>Заявки по странам</b> (всего · открытых)"]
+        for r in by_dest:
+            name = DESTINATIONS.get(r["destination"], (r["destination"] or "—",))[0]
+            lines.append(f"• {html.escape(name)}: {r['n']} · {r['open']}")
     cmds = [r for r in await db.event_counts(7) if r["kind"] == "command"][:6]
     if cmds:
         lines += ["", "<b>Популярные команды, 7 дн</b>", " · ".join(f"{html.escape(r['payload'])} {r['n']}" for r in cmds)]
@@ -358,7 +320,7 @@ async def users_text(db: Database, page: int, tz: ZoneInfo) -> tuple[str, object
         src = f" · {html.escape(r['source'])}" if r["source"] else ""
         lines.append(f"{mark} {r['name'] or '—'}{html.escape(uname)} · <code>{r['tg_id']}</code>\n"
                      f"     был {ago(r['last_seen'], tz)} · пришёл {r['created_at'].astimezone(tz).strftime('%d.%m')}"
-                     f" · подписок {r['subs']}{src}")
+                     f" · заявок {r['orders']}{src}")
     lines.append("\nКарточка: /user ID")
     kb = InlineKeyboardBuilder()
     if page > 0:
@@ -463,10 +425,9 @@ async def user_card(message: Message, command: CommandObject, db: Database, sett
         f"ID: <code>{user['tg_id']}</code> · {state}" + (" · заблокировал бота" if user["blocked_bot"] else ""),
         f"Пришёл: {user['created_at'].astimezone(tz).strftime('%d.%m.%Y %H:%M')} · источник: {html.escape(user['source'] or 'прямой заход')}",
         f"Последняя активность: {ago(user['last_seen'], tz)} · язык: {user['lang'] or '—'}",
-        "", "<b>Подписки</b>",
+        "", "<b>Заявки</b>",
     ]
-    lines += [f"• {html.escape(s['name'])}" + (f" ({fmt_date(s['date_from'])}–{fmt_date(s['date_to'])})" if s["date_from"] else "")
-              for s in subs] or ["нет"]
+    lines += [f"#{o['id']} {html.escape(o['destination'] or o['mission'])} · {o['status']}" for o in subs] or ["нет"]
     lines += ["", "<b>Последние действия</b>"]
     lines += [f"{e['at'].astimezone(tz).strftime('%d.%m %H:%M')} {e['kind']} {html.escape(e['payload'] or '')}" for e in events]
     kb = InlineKeyboardBuilder()
@@ -591,10 +552,10 @@ async def fallback(message: Message) -> None:
                              "Начни заново — /order, это займёт минуту.")
     else:
         kb = InlineKeyboardBuilder()
-        kb.button(text="📝 Оставить заявку", callback_data="go:order")
-        kb.button(text="🔔 Подписаться на слоты", callback_data="go:sub")
+        kb.button(text="📝 Записаться на визу", callback_data="go:order")
+        kb.button(text="📋 Мои заявки", callback_data="go:myorders")
         kb.adjust(1)
-        await message.answer("Я бот для записи на шенгенские визы с Кипра. Что сделать?", reply_markup=kb.as_markup())
+        await message.answer("Я помогаю записаться на шенгенскую визу с Кипра. Что сделать?", reply_markup=kb.as_markup())
 
 
 @router.callback_query(F.data.startswith("go:"))
@@ -604,8 +565,9 @@ async def go(call: CallbackQuery, db: Database, poller: Poller, settings: Settin
     if target == "order":
         from .orders import order_start
         await order_start(call.message, state, db, settings, uid=call.from_user.id)
-    elif target == "sub":
-        await call.message.answer("Выбери страны для уведомлений:", reply_markup=await sub_keyboard(db, call.from_user.id))
+    elif target == "myorders":
+        from .orders import my_orders
+        await my_orders(call.message, db, uid=call.from_user.id)
 
 
 @router.callback_query()

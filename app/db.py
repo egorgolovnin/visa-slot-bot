@@ -174,7 +174,7 @@ class Database:
                    count(*) FILTER (WHERE banned)       AS banned,
                    count(*) FILTER (WHERE blocked_bot)  AS blocked_bot,
                    count(*) FILTER (WHERE NOT allowed AND NOT banned) AS pending,
-                   (SELECT count(DISTINCT tg_id) FROM subscriptions) AS with_subs
+                   (SELECT count(DISTINCT tg_id) FROM orders) AS with_orders
             FROM users""")
 
     async def top_sources(self, limit: int = 8) -> list[asyncpg.Record]:
@@ -188,6 +188,12 @@ class Database:
             """SELECT m.name, count(s.tg_id) AS n FROM missions m
                LEFT JOIN subscriptions s ON s.mission = m.code WHERE m.offered
                GROUP BY m.name ORDER BY n DESC, m.name""")
+
+    async def orders_by_destination(self) -> list[asyncpg.Record]:
+        return await self.pool.fetch(
+            """SELECT COALESCE(destination, mission) AS destination, count(*) AS n,
+                      count(*) FILTER (WHERE status IN ('new', 'in_progress', 'booked')) AS open
+               FROM orders WHERE status <> 'cancelled' GROUP BY 1 ORDER BY n DESC""")
 
     async def event_counts(self, days: int) -> list[asyncpg.Record]:
         return await self.pool.fetch(
@@ -209,15 +215,14 @@ class Database:
     async def users_page(self, offset: int, limit: int) -> list[asyncpg.Record]:
         return await self.pool.fetch(
             """SELECT u.tg_id, u.name, u.username, u.source, u.allowed, u.banned, u.blocked_bot,
-                      u.created_at, u.last_seen, count(s.mission) AS subs
-               FROM users u LEFT JOIN subscriptions s ON s.tg_id = u.tg_id
+                      u.created_at, u.last_seen, count(o.id) AS orders
+               FROM users u LEFT JOIN orders o ON o.tg_id = u.tg_id
                GROUP BY u.tg_id ORDER BY u.last_seen DESC NULLS LAST OFFSET $1 LIMIT $2""", offset, limit)
 
     async def user_card(self, tg_id: int) -> tuple[asyncpg.Record | None, list, list]:
         user = await self.pool.fetchrow("SELECT * FROM users WHERE tg_id = $1", tg_id)
         subs = await self.pool.fetch(
-            """SELECT m.name, s.date_from, s.date_to FROM subscriptions s
-               JOIN missions m ON m.code = s.mission WHERE s.tg_id = $1""", tg_id)
+            "SELECT id, destination, mission, status FROM orders WHERE tg_id = $1 ORDER BY id DESC LIMIT 10", tg_id)
         events = await self.pool.fetch(
             "SELECT kind, payload, at FROM user_events WHERE tg_id = $1 ORDER BY at DESC LIMIT 12", tg_id)
         return user, subs, events
