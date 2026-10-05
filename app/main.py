@@ -10,6 +10,7 @@ from . import config
 from . import orders
 from .bot import TrackingMiddleware, attach_access, router, setup_commands
 from .db import Database
+from .fsm_storage import PgStorage
 from .poller import Poller
 
 log = logging.getLogger("main")
@@ -40,7 +41,9 @@ async def main() -> None:
         return False
 
     poller = Poller(settings, db, notify)
-    dp = Dispatcher(db=db, settings=settings, poller=poller)
+    storage = PgStorage(db)
+    await storage.init()
+    dp = Dispatcher(storage=storage, db=db, settings=settings, poller=poller)
     dp.message.outer_middleware(TrackingMiddleware())
     dp.callback_query.outer_middleware(TrackingMiddleware())
     for r in (orders.router, router):  # orders first: its state handlers must beat the catch-all

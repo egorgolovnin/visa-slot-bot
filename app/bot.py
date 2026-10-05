@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -591,6 +592,39 @@ async def discover(message: Message, poller: Poller, settings: Settings) -> None
     asyncio.create_task(job())
 
 
+LOOKS_LIKE_FORM = re.compile(r"\d{1,2}[./]\d{1,2}|@|^\+?\d{8,}|^[A-Za-z]+ [A-Za-z]+$")
+
+
 @router.message()
 async def fallback(message: Message) -> None:
-    await message.answer("Не понял. Список команд — /help")
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        await message.answer("Такой команды нет. Список команд — /help")
+    elif LOOKS_LIKE_FORM.search(text):
+        await message.answer("Похоже, ты заполнял заявку, но анкета закрылась (например, истекла или бот обновлялся). "
+                             "Начни заново — /order, это займёт минуту.")
+    else:
+        kb = InlineKeyboardBuilder()
+        kb.button(text="📝 Оставить заявку", callback_data="go:order")
+        kb.button(text="🔔 Подписаться на слоты", callback_data="go:sub")
+        kb.button(text="📅 Даты сейчас", callback_data="go:status")
+        kb.adjust(1)
+        await message.answer("Я бот для записи на шенгенские визы с Кипра. Что сделать?", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("go:"))
+async def go(call: CallbackQuery, db: Database, poller: Poller, settings: Settings, state: FSMContext) -> None:
+    await call.answer()
+    target = call.data.split(":")[1]
+    if target == "order":
+        from .orders import order_start
+        await order_start(call.message, state, db, settings, uid=call.from_user.id)
+    elif target == "sub":
+        await call.message.answer("Выбери страны для уведомлений:", reply_markup=await sub_keyboard(db, call.from_user.id))
+    else:
+        await status(call.message, db, poller, settings)
+
+
+@router.callback_query()
+async def stale_button(call: CallbackQuery) -> None:
+    await call.answer("Эта кнопка устарела. Команды — /help", show_alert=True)

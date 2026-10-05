@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS orders (
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS orders_status ON orders (status);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS destination TEXT;
 CREATE TABLE IF NOT EXISTS prices (
     mission   TEXT PRIMARY KEY,
     price_eur NUMERIC(10, 2) NOT NULL
@@ -331,10 +332,11 @@ class Database:
         return [r["tg_id"] for r in rows]
 
     # ---- orders ----
-    async def create_order(self, tg_id: int, mission: str, d_from, d_to, applicant: str) -> int:
+    async def create_order(self, tg_id: int, mission: str, d_from, d_to, applicant: str,
+                           destination: str | None = None) -> int:
         return await self.pool.fetchval(
-            """INSERT INTO orders (tg_id, mission, date_from, date_to, applicant)
-               VALUES ($1, $2, $3, $4, $5) RETURNING id""", tg_id, mission, d_from, d_to, applicant)
+            """INSERT INTO orders (tg_id, mission, date_from, date_to, applicant, destination)
+               VALUES ($1, $2, $3, $4, $5, $6) RETURNING id""", tg_id, mission, d_from, d_to, applicant, destination)
 
     async def order(self, order_id: int) -> asyncpg.Record | None:
         return await self.pool.fetchrow(
@@ -349,7 +351,7 @@ class Database:
 
     async def orders_list(self, statuses: tuple[str, ...], tg_id: int | None = None, limit: int = 30) -> list:
         return await self.pool.fetch(
-            """SELECT o.id, o.tg_id, o.mission, o.status, o.date_from, o.date_to, o.price_eur, o.appointment,
+            """SELECT o.id, o.tg_id, o.mission, o.destination, o.status, o.date_from, o.date_to, o.price_eur, o.appointment,
                       o.invoice_url, o.created_at, m.name AS mission_name, u.name AS user_name
                FROM orders o LEFT JOIN missions m ON m.code = o.mission LEFT JOIN users u ON u.tg_id = o.tg_id
                WHERE o.status = ANY($1::text[]) AND ($2::bigint IS NULL OR o.tg_id = $2)
