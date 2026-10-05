@@ -42,6 +42,7 @@ async def discover(poller, countries: list[str] | None = None) -> str:
         for m in SCHENGEN:
             await poller.db.set_mission(f"{c}-{m}", mission_name(f"{c}-{m}"), False)
     for c in countries or [k for k in COUNTRIES if k not in DISABLED]:
+        blocked_in_row = 0
         for m in SCHENGEN:
             code = f"{c}-{m}"
             for attempt in range(3):
@@ -49,17 +50,22 @@ async def discover(poller, countries: list[str] | None = None) -> str:
                     await poller.client.fetch(code)
                     await poller.db.set_mission(code, mission_name(code), True)
                     found.setdefault(c, []).append(SCHENGEN[m])
+                    blocked_in_row = 0
                     break
                 except NotOffered:
                     await poller.db.set_mission(code, mission_name(code), False)
+                    blocked_in_row = 0
                     break
                 except RateLimited:
                     await asyncio.sleep(90)
                 except Blocked as e:
+                    # one mission refusing (e.g. France routed elsewhere) doesn't mean the whole country does
                     log.info("abroad %s blocked: %s", code, str(e)[:80])
-                    blocked.append(c)
+                    await poller.db.set_mission(code, mission_name(code), False)
+                    blocked_in_row += 1
                     break
-            if c in blocked:
+            if blocked_in_row >= 3:
+                blocked.append(c)
                 break
             await asyncio.sleep(random.uniform(1.5, 3))
         log.info("abroad %s: %s", c, found.get(c, []))

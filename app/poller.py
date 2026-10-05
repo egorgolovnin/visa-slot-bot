@@ -279,9 +279,9 @@ class Poller:
             log.warning("visarea import failed: %s", e)
 
     async def discover_abroad(self) -> None:
-        if await self.db.kv_get("abroad_discovery") == "v1":
+        if await self.db.kv_get("abroad_discovery") == "v2":
             return
-        await self.db.kv_set("abroad_discovery", "v1")
+        await self.db.kv_set("abroad_discovery", "v2")
         try:
             from .abroad import discover
             await self.alert_admins((await discover(self))[:3800])
