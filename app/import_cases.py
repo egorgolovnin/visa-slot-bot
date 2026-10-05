@@ -51,7 +51,7 @@ def _outcome(result: str | None) -> str:
 def _validity(result: str | None) -> str | None:
     """What the visa was granted for: 'под даты поездки (+- 5 дней)', 'от 1 до 3 месяцев', free text."""
     r = (result or "").strip()
-    r = re.sub(r"^(да|yes)[,.:\s]*", "", r, flags=re.I).strip()
+    r = re.sub(r"^(да|yes)(?![а-яёa-z])[,.:\s]*", "", r, flags=re.I).strip()
     return (r[:1].upper() + r[1:])[:80] if r else None
 
 
