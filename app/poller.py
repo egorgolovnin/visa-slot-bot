@@ -261,7 +261,7 @@ class Poller:
         """Once a day: refresh the open case base from cases.visarea.travel."""
         from datetime import date as _date
         from .import_cases import import_visarea
-        today = "v2-" + _date.today().isoformat()  # bump the prefix to force a re-import after parser changes
+        today = "v3-" + _date.today().isoformat()  # bump the prefix to force a re-import after parser changes
         if await self.db.kv_get("visarea_import") == today:
             return
         try:
