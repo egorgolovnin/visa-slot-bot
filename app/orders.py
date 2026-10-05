@@ -315,8 +315,10 @@ async def order_start(message: Message, state: FSMContext, db: Database, setting
     offered = {c for c, _ in await db.offered_missions()}
     from .documents import PROCESS
     await message.answer(PROCESS.format(price=f"{settings.default_price:.0f}", docs_price=f"{settings.docs_price:.0f}"))
+    import os
+    abroad = os.getenv("ABROAD_ORDERS", "false").lower() in ("1", "true", "yes")  # MVP: Cyprus only
     regions = sorted({region_of(k) for k, (_, m, _) in DESTINATIONS.items() if m in offered}
-                     | {c.split("-", 1)[0] for c in offered if "-" in c and c.split("-", 1)[0] in REGIONS},
+                     | ({c.split("-", 1)[0] for c in offered if "-" in c and c.split("-", 1)[0] in REGIONS} if abroad else set()),
                      key=lambda r: list(REGIONS).index(r))
     if len(regions) > 1:
         kb = InlineKeyboardBuilder()
