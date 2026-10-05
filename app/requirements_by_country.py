@@ -1,5 +1,9 @@
 """What each submission system needs to book a slot, and what it charges at booking time.
 
+VFS field flags come from VFS's own form configuration (GET /configuration/fields/{mission}/cyp, 05.10.2026):
+no document upload anywhere; Finland hides gender, date of birth and passport expiry but asks a reference number;
+Austria has payOnlineEnabled=false (fee is paid at the centre); names allow only latin letters and spaces.
+
 fee_at_booking: EUR the booking system charges by card when the slot is taken (we prepay it with the
 client's money, so the client pays it to us first). 0 = nothing at booking (fee, if any, is paid at the centre).
 Sources: VFS Cyprus country pages (Hungary 22.80, Austria 25.27), the reseller chat (prepaid at booking),
@@ -17,15 +21,19 @@ class Requirements:
     passport_scan: bool     # booking form requires the passport bio page upload
     system: str
     phone: bool = True      # booking form requires a phone number (VFS does)
+    birth: bool = True
+    passport_exp: bool = True
+    online_payment: bool = False   # VFS payOnlineEnabled
 
 
 VFS = "VFS Global"
 REQUIREMENTS: dict[str, Requirements] = {
-    "hun": Requirements(22.80, gender=True, passport_scan=True, system=VFS),
-    "aut": Requirements(25.27, gender=True, passport_scan=True, system=VFS),
-    "svk": Requirements(40.00, gender=True, passport_scan=False, system=VFS),
-    "fin": Requirements(0.0, gender=True, passport_scan=False, system=VFS),
-    "hrv": Requirements(0.0, gender=True, passport_scan=False, system=VFS),
+    "hun": Requirements(22.80, gender=True, passport_scan=False, system=VFS, online_payment=True),
+    "aut": Requirements(0.0, gender=True, passport_scan=False, system=VFS, online_payment=False),
+    "svk": Requirements(40.00, gender=True, passport_scan=False, system=VFS, online_payment=True),
+    "fin": Requirements(0.0, gender=False, passport_scan=False, system=VFS, birth=False, passport_exp=False,
+                        online_payment=True),
+    "hrv": Requirements(0.0, gender=True, passport_scan=False, system=VFS, online_payment=True),
     "deu": Requirements(0.0, gender=False, passport_scan=False, system="посольство Германии", phone=False),
     "grc": Requirements(0.0, gender=False, passport_scan=False, system="посольство Греции", phone=False),
 }
@@ -41,7 +49,11 @@ def form_steps(mission: str) -> list[str]:
     steps = ["window", "full_name"]
     if r.gender:
         steps.append("gender")
-    steps += ["birth", "nationality", "passport", "passport_exp"]
+    if r.birth:
+        steps.append("birth")
+    steps += ["nationality", "passport"]
+    if r.passport_exp:
+        steps.append("passport_exp")
     if r.passport_scan:
         steps.append("passport_scan")
     steps.append("residence_exp")

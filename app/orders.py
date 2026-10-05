@@ -291,8 +291,9 @@ async def order_name(message: Message, state: FSMContext, db: Database, settings
         await message.answer(f"Нужно латиницей, как в паспорте. Если так — <code>{html.escape(guess)}</code>, "
                              "скопируй и пришли (или напиши как в паспорте).", reply_markup=step_kb("full_name"))
         return
-    name = raw.upper()
-    if not re.fullmatch(r"[A-Z][A-Z \-']{1,80}", name) or " " not in name:
+    # VFS accepts only latin letters and single spaces: hyphens/apostrophes become spaces
+    name = re.sub(r"\s+", " ", re.sub(r"[-'’]", " ", raw.upper())).strip()
+    if not re.fullmatch(r"[A-Z]+( [A-Z]+)+", name) or len(name) > 80:
         await message.answer("Нужны имя <b>и</b> фамилия латиницей. Пример: <code>IVAN IVANOV</code>",
                              reply_markup=step_kb("full_name"))
         return
@@ -489,9 +490,10 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
         f"Страна: {html.escape(data['mission_name'])} ({html.escape(data.get('note', ''))})\n"
         f"Даты подачи: {window}\n"
         f"Имя: {html.escape(data['full_name'])}\n"
-        f"Дата рождения: {fmt_date(date.fromisoformat(data['birth']))}\n"
-        f"Гражданство: {html.escape(data['nationality'])}\n"
-        f"Паспорт: {html.escape(data['passport'])} до {fmt_date(date.fromisoformat(data['passport_exp']))}\n"
+        + (f"Дата рождения: {fmt_date(date.fromisoformat(data['birth']))}\n" if data.get("birth") else "")
+        + f"Гражданство: {html.escape(data['nationality'])}\n"
+        + f"Паспорт: {html.escape(data['passport'])}"
+        + (f" до {fmt_date(date.fromisoformat(data['passport_exp']))}" if data.get("passport_exp") else "") + "\n"
         + (f"Пол: {'мужской' if data.get('gender') == 'M' else 'женский'}\n" if data.get("gender") else "")
         + (f"ВНЖ до: {fmt_date(date.fromisoformat(data['residence_exp']))}\n" if data.get("residence_exp")
            else ("ВНЖ: на продлении (ресипт)\n" if data.get("residence_receipt") else ""))
