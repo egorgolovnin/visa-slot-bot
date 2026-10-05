@@ -37,6 +37,11 @@ class MissionStats:
     last: datetime | None = None
     episodes: list[Episode] = field(default_factory=list)
     n_dates: list[int] = field(default_factory=list)
+    refresh_gaps: list[float] = field(default_factory=list)   # minutes between VFS data refreshes
+    times: Counter = field(default_factory=Counter)          # free appointment times seen (Germany)
+    times_per_day: list[int] = field(default_factory=list)
+    _last_refresh: datetime | None = None
+    _last_age: int | None = None
 
     @property
     def covered_days(self) -> float:
@@ -49,6 +54,21 @@ def compute(rows) -> dict[str, MissionStats]:
         st = out.setdefault(r["mission"], MissionStats(r["mission"], r["name"] or r["mission"]))
         st.checks += 1
         st.first = st.first or r["at"]
+        age = r["age_min"] if "age_min" in r.keys() else None
+        if age is not None:
+            refreshed_at = r["at"] - timedelta(minutes=age)
+            # a new VFS refresh happened if the data got younger than we would expect
+            if st._last_refresh is None or refreshed_at - st._last_refresh > timedelta(minutes=3):
+                if st._last_refresh is not None and r["at"] - (st.last or r["at"]) <= GAP:
+                    st.refresh_gaps.append((refreshed_at - st._last_refresh).total_seconds() / 60)
+                st._last_refresh = refreshed_at
+        raw_times = r["times"] if "times" in r.keys() else None
+        if raw_times:
+            for chunk in raw_times.split(";"):
+                _, _, t = chunk.partition("=")
+                day_times = [x for x in t.split(",") if x]
+                st.times.update(day_times)
+                st.times_per_day.append(len(day_times))
         prev_at = st.last
         st.last = r["at"]
         current = st.episodes[-1] if st.episodes and st.episodes[-1].open_now else None
@@ -77,6 +97,15 @@ def fmt_hours(h: float) -> str:
     return f"{h / 24:.0f} дн"
 
 
+def _footer(s: MissionStats) -> str:
+    every = (s.last - s.first).total_seconds() / 60 / max(s.checks - 1, 1) if s.checks > 1 else 0
+    parts = [f"проверок {s.checks}" + (f" (раз в ~{every:.0f} мин)" if every else "")]
+    gaps = [g for g in s.refresh_gaps if 1 <= g <= 24 * 60]
+    if len(gaps) >= 3:
+        parts.append(f"VFS обновляет данные раз в ~{statistics.median(gaps):.0f} мин")
+    return "  <i>" + " · ".join(parts) + "</i>"
+
+
 def report(rows, days: int, tz: str, since: datetime | None) -> str:
     z = ZoneInfo(tz)
     stats = compute(rows)
@@ -91,8 +120,10 @@ def report(rows, days: int, tz: str, since: datetime | None) -> str:
     for s in ranked:
         lines.append("")
         lines.append(f"<b>{html.escape(s.name)}</b>")
+        footer = _footer(s)
         if not s.episodes:
-            lines.append(f"  ⚪️ ни разу не открывались ({s.checks} проверок)")
+            lines.append(f"  ⚪️ ни разу не открывались")
+            lines.append(footer)
             continue
         durations = [e.hours for e in s.episodes if not e.open_now] or [e.hours for e in s.episodes]
         per_month = len(s.episodes) / max(s.covered_days, 1 / 24) * 30
@@ -112,8 +143,14 @@ def report(rows, days: int, tz: str, since: datetime | None) -> str:
         if s.n_dates and s.code == "deu":
             lines.append(f"  🗓 свободных дней в календаре: в среднем {statistics.mean(s.n_dates):.0f}, "
                          f"максимум {max(s.n_dates)}")
+        if s.times_per_day:
+            lines.append(f"  🕒 свободных окошек в день: обычно {statistics.median(s.times_per_day):.0f}, "
+                         f"максимум {max(s.times_per_day)}")
+            top = ", ".join(t for t, _ in s.times.most_common(5))
+            lines.append(f"  ⌚ чаще всего свободно время: {top}")
         if s.episodes[-1].open_now:
             lines.append(f"  👉 сейчас открыто, ближайшая дата {s.episodes[-1].earliest:%d.%m.%Y}")
+        lines.append(footer)
     if not stats:
         lines.append("\nПока нет данных.")
     return "\n".join(lines)

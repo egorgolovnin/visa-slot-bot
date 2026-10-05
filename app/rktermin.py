@@ -38,6 +38,9 @@ ACTION_RE = re.compile(r"<form[^>]*id=\"appointment_captcha_month\"[^>]*action=\
 INPUT_RE = re.compile(r"<input([^>]*)>", re.I)
 ATTR_RE = re.compile(r"(\w+)=\"([^\"]*)\"")
 DAY_RE = re.compile(r"appointment_showDay\.do[^\"']*?dateStr=(\d{2}\.\d{2}\.\d{4})")
+DAY_HREF_RE = re.compile(r"href=\"([^\"]*appointment_showDay\.do[^\"]*dateStr=(\d{2}\.\d{2}\.\d{4})[^\"]*)\"")
+TIME_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
+DAYS_WITH_TIMES = 3   # open at most this many day pages per check to read the free times
 NEXT_MONTH_RE = re.compile(r"href=\"([^\"]*appointment_showMonth\.do[^\"]*dateStr=(\d{2}\.\d{2}\.\d{4})[^\"]*)\"")
 CATEGORY_RE = re.compile(r"categoryId=(\d+)")
 
@@ -121,6 +124,8 @@ class RkTerminClient:
         self.proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
         self.category_id: str | None = os.getenv("RK_CATEGORY_ID") or "1955"
         self.last_free_days = 0
+        self.last_times: dict[date, list[str]] = {}
+        self._day_logged = False
 
     def page_url(self) -> str:
         cat = f"&categoryId={self.category_id}" if self.category_id else ""
@@ -188,6 +193,35 @@ class RkTerminClient:
             return ""
         return text
 
+    async def _read_times(self, s: AsyncSession, month_page: str, days: list[date]) -> dict[date, list[str]]:
+        """Open the first few free days and read their appointment times (e.g. 09:00, 09:30)."""
+        hrefs = {}
+        for m in DAY_HREF_RE.finditer(month_page):
+            d = datetime.strptime(m.group(2), "%d.%m.%Y").date()
+            hrefs.setdefault(d, htmllib.unescape(m.group(1)))
+        out: dict[date, list[str]] = {}
+        for d in days[:DAYS_WITH_TIMES]:
+            if d not in hrefs:
+                continue
+            await asyncio.sleep(random.uniform(1.5, 3))
+            try:
+                page = await self._get(s, urljoin("https://service2.diplo.de/rktermin/", hrefs[d]))
+            except Exception as e:
+                log.info("day page %s failed: %s", d, e)
+                break
+            if CAPTCHA_RE.search(page):
+                break
+            # times live in links to the booking form; fall back to any HH:MM in the page body
+            links = re.findall(r"<a[^>]*appointment_showForm[^>]*>(.*?)</a>", page, re.S | re.I)
+            source = " ".join(links) if links else re.sub(r"<[^>]+>", " ", page)
+            times = sorted({f"{int(h):02d}:{mi}" for h, mi in TIME_RE.findall(source) if 6 <= int(h) <= 19})
+            if not self._day_logged:
+                self._day_logged = True
+                log.info("day page sample %s: links=%d times=%s text=%s", d, len(links), times,
+                         re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", page))[:800])
+            out[d] = times
+        return out
+
     async def fetch(self) -> tuple[list[Slot], str]:
         try:
             return await self._fetch()
@@ -224,11 +258,14 @@ class RkTerminClient:
                 days = parse_days(page)
                 seen_months += 1
 
+            self.last_times = await self._read_times(s, page, days) if days else {}
+
             if not days and NO_SLOTS not in page:
                 log.info("rktermin page without days: %s", re.sub(r"\s+", " ", page)[:1200])
             earliest = days[0] if days else None
             self.last_free_days = len(days)
             slot = Slot("deu", CENTRE, CATEGORY, earliest, earliest.isoformat() if earliest else "")
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            log.info("rktermin: %d free days, earliest=%s, months checked=%d", len(days), earliest, seen_months)
+            log.info("rktermin: %d free days, earliest=%s, months checked=%d, times=%s",
+                     len(days), earliest, seen_months, {d.isoformat(): t for d, t in self.last_times.items()})
             return [slot], stamp

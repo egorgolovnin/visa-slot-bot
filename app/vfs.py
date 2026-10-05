@@ -83,6 +83,15 @@ def parse_response(mission: str, data: dict) -> list[Slot]:
     return slots
 
 
+def data_age_minutes(data: dict) -> int | None:
+    """VFS says how stale its answer is: lastUpdatedValue + lastUpdatedType (S/M/H/D)."""
+    value, unit = data.get("lastUpdatedValue"), (data.get("lastUpdatedType") or "").upper()
+    if not isinstance(value, (int, float)) or not unit:
+        return None
+    factor = {"S": 1 / 60, "M": 1, "H": 60, "D": 1440}.get(unit[0])
+    return round(value * factor) if factor else None
+
+
 def _is_rate_limited(status: int, text: str) -> bool:
     return status == 429 or '"429' in text
 
@@ -94,6 +103,7 @@ class VfsPublicClient:
         self.session = AsyncSession(proxies=proxies, timeout=30)
         self.working_profile: str | None = None
         self._raw_logged: set[str] = set()
+        self.last_age_min: int | None = None   # how old VFS's own cached data was, in minutes
 
     async def close(self) -> None:
         await self.session.close()
@@ -129,6 +139,7 @@ class VfsPublicClient:
                 if mission not in self._raw_logged:
                     self._raw_logged.add(mission)
                     log.info("raw %s: %s", mission, text[:1500])
+                self.last_age_min = data_age_minutes(data) if isinstance(data, dict) else None
                 if isinstance(data, dict) and data.get("vacList"):
                     return parse_response(mission, data), str(data.get("lastUpdatedOn") or "")
                 raise NotOffered(text[:200])

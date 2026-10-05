@@ -175,7 +175,12 @@ class Poller:
             await self.db.save_fetch(code, slots, changes, updated)
             dated = [x.earliest for x in slots if x.earliest]
             n_dates = self.rk.last_free_days if code in RK_MISSIONS else len(dated)
-            await self.db.add_observation(code, bool(dated), min(dated) if dated else None, n_dates)
+            times = None
+            if code in RK_MISSIONS and self.rk.last_times:
+                # "2026-11-12=09:00,09:30;2026-11-13=10:00"
+                times = ";".join(f"{d.isoformat()}={','.join(t)}" for d, t in sorted(self.rk.last_times.items()))
+            age = self.client.last_age_min if is_vfs else None
+            await self.db.add_observation(code, bool(dated), min(dated) if dated else None, n_dates, age, times)
             if not first_sight:
                 await self._announce(code, name, changes, updated)
             await self._recovered(code, name)
@@ -223,12 +228,14 @@ class Poller:
                        and (o["date_to"] is None or ch.slot.earliest <= o["date_to"])]
             ids = ", ".join(f"#{o['id']}" for o in waiting)
             orders_line = f"\n\n<b>Подходит заявкам: {ids}</b> → /orders" if waiting else "\n\nПодходящих заявок нет."
+            times = self.rk.last_times.get(ch.slot.earliest, []) if code in RK_MISSIONS else []
             text = (
                 f"{head}: <b>{html.escape(name)}</b>\n"
                 f"Центр: {html.escape(ch.slot.centre)}\n"
                 f"Категория: {html.escape(ch.slot.category)}\n"
                 f"Ближайшая дата: <b>{fmt_date(ch.slot.earliest)}</b>{was}\n"
-                f"Данные от: {html.escape(updated or '—')}\n"
+                + (f"Время: {', '.join(times)}\n" if times else "")
+                + f"Данные от: {html.escape(updated or '—')}\n"
                 f"{self.page_url(code)}{orders_line}"
             )
             await self.alert_admins(("⚡ " if waiting else "") + text)

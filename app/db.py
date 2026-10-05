@@ -111,6 +111,8 @@ CREATE TABLE IF NOT EXISTS observations (
     n_dates   INT NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS observations_mission_at ON observations (mission, at);
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS age_min INT;
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS times   TEXT;
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -474,14 +476,15 @@ class Database:
                AND at > now() - make_interval(mins => $3)""", tg_id, kind, minutes)
 
     # ---- slot statistics ----
-    async def add_observation(self, mission: str, available: bool, earliest: date | None, n_dates: int) -> None:
+    async def add_observation(self, mission: str, available: bool, earliest: date | None, n_dates: int,
+                              age_min: int | None = None, times: str | None = None) -> None:
         await self.pool.execute(
-            "INSERT INTO observations (mission, available, earliest, n_dates) VALUES ($1, $2, $3, $4)",
-            mission, available, earliest, n_dates)
+            """INSERT INTO observations (mission, available, earliest, n_dates, age_min, times)
+               VALUES ($1, $2, $3, $4, $5, $6)""", mission, available, earliest, n_dates, age_min, times)
 
     async def observations(self, days: int) -> list[asyncpg.Record]:
         return await self.pool.fetch(
-            """SELECT o.mission, m.name, o.at, o.available, o.earliest, o.n_dates
+            """SELECT o.mission, m.name, o.at, o.available, o.earliest, o.n_dates, o.age_min, o.times
                FROM observations o LEFT JOIN missions m ON m.code = o.mission
                WHERE o.at > now() - make_interval(days => $1) ORDER BY o.mission, o.at""", days)
 
