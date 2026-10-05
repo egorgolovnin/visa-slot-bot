@@ -31,9 +31,11 @@ class Requirements:
 VFS = "VFS Global"
 REQUIREMENTS: dict[str, Requirements] = {
     # fees: VFS Cyprus country pages (05.10.2026). Only Hungary charges at booking; others at the centre.
-    "hun": Requirements(22.80, gender=True, passport_scan=False, system=VFS, online_payment=True,
+    # passport scan: VFS config shows no upload, but a reseller with 3 years of real bookings requires it
+    # for Hungary and Austria, so we collect it there.
+    "hun": Requirements(22.80, gender=True, passport_scan=True, system=VFS, online_payment=True,
                         at_centre="консульский сбор 90 €"),
-    "aut": Requirements(0.0, gender=True, passport_scan=False, system=VFS, online_payment=False,
+    "aut": Requirements(0.0, gender=True, passport_scan=True, system=VFS, online_payment=False,
                         at_centre="консульский сбор 90 € + сервисный сбор VFS 25,27 € (картой)"),
     "svk": Requirements(0.0, gender=True, passport_scan=False, system=VFS, online_payment=True,
                         at_centre="консульский сбор 90 € (наличными) + сервисный сбор визового центра"),
