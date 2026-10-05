@@ -11,7 +11,9 @@ from typing import Awaitable, Callable
 from .config import Settings
 from .db import Database
 from .diff import EARLIER, NOTIFY_KINDS, OPENED, Change, diff
+from . import supersaas
 from .rktermin import RkTerminClient
+from .supersaas import SuperSaasClient
 from .vfs import SCHENGEN, Blocked, NotOffered, RateLimited, Slot, VfsPublicClient
 
 log = logging.getLogger("poller")
@@ -25,6 +27,7 @@ RK_COOLDOWN = 1800       # seconds to leave RK-Termin alone after a failed check
 
 # missions served by non-VFS systems: code -> display name
 RK_MISSIONS = {"deu": "Германия (+NL, BE, DK, NO, IS, LU)"}
+SS_MISSIONS = {"grc": "Греция (+Мальта)"}
 
 
 @dataclass
@@ -51,6 +54,7 @@ class Poller:
         self.client = VfsPublicClient(settings.country, settings.proxy_url)
         self.rk = RkTerminClient(settings.proxy_url)
         self.rk_resume_at: datetime | None = None
+        self.ss = SuperSaasClient(settings.proxy_url)
         self.health = Health()
         self._wake = asyncio.Event()
 
@@ -59,16 +63,24 @@ class Poller:
             await self.notify(uid, text)
 
     def page_url(self, code: str) -> str:
-        return self.rk.page_url() if code in RK_MISSIONS else self.client.page_url(code)
+        if code in RK_MISSIONS:
+            return self.rk.page_url()
+        if code in SS_MISSIONS:
+            return self.ss.page_url()
+        return self.client.page_url(code)
 
     async def fetch(self, code: str) -> tuple[list[Slot], str]:
         if code in RK_MISSIONS:
             return await self.rk.fetch()
+        if code in SS_MISSIONS:
+            return await self.ss.fetch()
         return await self.client.fetch(code)
 
     async def register_static(self) -> None:
         for code, name in RK_MISSIONS.items():
             await self.db.set_mission(code, name, True)
+        for code, name in SS_MISSIONS.items():
+            await self.db.set_mission(code, name, supersaas.enabled())
 
     # ---- discovery: which Schengen missions does VFS serve in this country ----
     async def discover(self) -> str:
@@ -80,7 +92,7 @@ class Poller:
                 return f"Миссии из MISSIONS: {', '.join(self.s.missions)}"
             found, blocked = [], None
             for code, name in SCHENGEN.items():
-                if code in RK_MISSIONS:
+                if code in RK_MISSIONS or code in SS_MISSIONS or code == "mlt":
                     continue
                 try:
                     await self.client.fetch(code)

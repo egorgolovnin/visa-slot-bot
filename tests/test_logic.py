@@ -75,3 +75,11 @@ def test_rktermin_only_continue_button_is_sent():
     from app import rktermin
     src = inspect.getsource(rktermin.RkTerminClient._pass_captcha)
     assert 'not k.startswith("action:")' in src
+
+
+def test_supersaas_parsing():
+    from datetime import date as d
+    from app.supersaas import no_free_slots, parse_free_dates
+    page = "<table><tr><td>Mon 12 Oct 2099 09:00</td></tr><tr><td>Oct 3, 2099</td></tr><tr><td>1 Jan 2000</td></tr></table>"
+    assert parse_free_dates(page) == [d(2099, 10, 3), d(2099, 10, 12)]
+    assert no_free_slots("<p>No available space found</p>")

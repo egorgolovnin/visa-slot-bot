@@ -46,6 +46,7 @@ async def main() -> None:
     finally:
         task.cancel()
         await poller.client.close()
+        await poller.ss.close()
         await db.close()
         await bot.session.close()
 
