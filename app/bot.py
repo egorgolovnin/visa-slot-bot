@@ -26,6 +26,7 @@ USER_COMMANDS = [
 ]
 ADMIN_COMMANDS = [
     ("admin", "Панель админа"),
+    ("panel", "Кабинет в браузере"),
     ("orders", "Открытые заявки"),
     ("status", "Ближайшие даты сейчас"),
     ("history", "История слотов: /history hun"),
@@ -284,14 +285,18 @@ async def history(message: Message, command: CommandObject, db: Database, settin
 
 # ---- admin ----
 def admin_keyboard():
+    from aiogram.types import WebAppInfo
+    from .web import public_url
     kb = InlineKeyboardBuilder()
+    if public_url():
+        kb.button(text="📊 Открыть кабинет", web_app=WebAppInfo(url=f"{public_url()}/panel"))
     kb.button(text="🔄 Обновить", callback_data="adm:dash")
     kb.button(text="👥 Пользователи", callback_data="adm:users:0")
     kb.button(text="🩺 Проверки", callback_data="adm:health")
     kb.button(text="📈 По дням", callback_data="adm:days")
     kb.button(text="📋 Заявки", callback_data="adm:orders")
     kb.button(text="📊 Слоты", callback_data="adm:slots")
-    kb.adjust(2)
+    kb.adjust(*([1] if public_url() else []), 2, 2, 2)
     return kb.as_markup()
 
 
@@ -423,6 +428,24 @@ async def admin_cb(call: CallbackQuery, db: Database, settings: Settings, poller
     except Exception:
         pass  # message not modified
     await call.answer()
+
+
+@router.message(Command("panel"))
+async def panel_cmd(message: Message, settings: Settings) -> None:
+    if not await admin_only(message, settings):
+        return
+    from aiogram.types import WebAppInfo
+    from .web import panel_key, public_url
+    url = public_url()
+    if not url:
+        await message.answer("Кабинет не опубликован: у сервиса на Railway нет публичного домена.")
+        return
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📊 Открыть в Telegram", web_app=WebAppInfo(url=f"{url}/panel"))
+    text = "Кабинет открывается кнопкой ниже прямо в Telegram."
+    if panel_key():
+        text += (f"\n\nДля компьютера — личная ссылка, никому не пересылай:\n<code>{url}/panel?key={panel_key()}</code>")
+    await message.answer(text, reply_markup=kb.as_markup())
 
 
 @router.message(Command("slots"))

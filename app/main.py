@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 
 from . import config
-from . import orders, support
+from . import orders, support, web
 from .bot import TrackingMiddleware, attach_access, router, setup_commands
 from .db import Database
 from .fsm_storage import PgStorage
@@ -56,12 +56,15 @@ async def main() -> None:
             log.info("crypto pay ok: %s", await orders.payments.check())
         except Exception as e:
             log.error("crypto pay check failed: %s", e)
+    web_runner = await web.start(db, settings, poller)
     task = asyncio.create_task(poller.run())
     pay_task = asyncio.create_task(orders.payment_watcher(bot, db, settings))
     try:
         await dp.start_polling(bot)
     finally:
         task.cancel()
+        if web_runner:
+            await web_runner.cleanup()
         pay_task.cancel()
         await poller.close()
         await db.close()

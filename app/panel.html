@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Кабинет</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #eef1f5; --surface: #ffffff; --text: #18202b; --muted: #687384; --line: #dde2ea;
+    --ink: #6a4bc4; --ink-soft: rgba(106, 75, 196, .10);
+    --ok: #1f8a5b; --wait: #b7791f; --bad: #c2410c;
+    --r-lg: 18px; --r-sm: 8px;
+    font-family: "Golos Text", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12161d; --surface: #1b212b; --text: #e8ecf2; --muted: #93a0b3; --line: #2a3240;
+      --ink: #a58cf0; --ink-soft: rgba(165, 140, 240, .14); --ok: #4cc38a; --wait: #e2a84a; --bad: #f08a5d;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161d; --surface: #1b212b; --text: #e8ecf2; --muted: #93a0b3; --line: #2a3240;
+    --ink: #a58cf0; --ink-soft: rgba(165, 140, 240, .14); --ok: #4cc38a; --wait: #e2a84a; --bad: #f08a5d;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    padding: calc(env(safe-area-inset-top, 0px) + 18px) 16px calc(env(safe-area-inset-bottom, 0px) + 40px);
+    font-size: 15px; line-height: 1.45; -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+  main { max-width: 1080px; margin: 0 auto; display: grid; gap: 28px; }
+  h1 { font-size: 26px; font-weight: 800; letter-spacing: -.02em; margin: 0; }
+  h2 { font-size: 17px; font-weight: 700; margin: 0 0 12px; letter-spacing: -.01em; }
+  .muted { color: var(--muted); }
+  button { font: inherit; }
+
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  header p { margin: 2px 0 0; font-size: 13px; }
+  .refresh {
+    border: 1px solid var(--line); background: var(--surface); color: var(--text);
+    border-radius: 999px; padding: 8px 14px; cursor: pointer; font-weight: 600; font-size: 14px;
+  }
+  .refresh:focus-visible, .chip:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  /* the one bold element: revenue as a border-control stamp */
+  .hero { display: grid; grid-template-columns: auto 1fr; gap: 22px; align-items: center; }
+  .stamp {
+    color: var(--ink); border: 3px solid currentColor; border-radius: 14px; padding: 6px;
+    transform: rotate(-3deg); width: max-content; min-width: 210px;
+  }
+  .stamp-inner { border: 1.5px dashed currentColor; border-radius: 9px; padding: 12px 18px 14px; }
+  .stamp small { display: block; font-size: 12px; font-weight: 600; opacity: .85; }
+  .stamp strong { display: block; font-size: 44px; line-height: 1.05; font-weight: 800; letter-spacing: -.03em; margin: 2px 0; }
+  .stamp em { font-style: normal; font-size: 12px; font-weight: 600; opacity: .85; }
+  .facts { display: grid; gap: 10px; }
+  @media (max-width: 560px) {
+    .hero { grid-template-columns: 1fr; gap: 18px; }
+    .stamp { margin-left: 6px; }
+    .facts { grid-template-columns: 1fr 1fr; gap: 14px; }
+  }
+  .fact b { font-size: 20px; font-weight: 700; display: block; }
+  .fact span { font-size: 13px; color: var(--muted); }
+
+  .panel { background: var(--surface); border-radius: var(--r-lg); padding: 18px; }
+  .grid-2 { display: grid; gap: 28px; grid-template-columns: 1fr; }
+  @media (min-width: 820px) { .grid-2 { grid-template-columns: 1fr 1fr; } }
+
+  /* order pipeline: a real sequence, so arrows carry meaning */
+  .pipeline { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; }
+  .step { position: relative; padding: 4px 10px 4px 0; }
+  .step + .step { padding-left: 16px; }
+  .step + .step::before {
+    content: ""; position: absolute; left: 0; top: 14px; width: 8px; height: 8px;
+    border-top: 2px solid var(--line); border-right: 2px solid var(--line); transform: rotate(45deg);
+  }
+  .step b { font-size: 26px; font-weight: 800; display: block; line-height: 1.1; }
+  .step span { font-size: 12.5px; color: var(--muted); display: block; }
+  .step.hot b { color: var(--wait); }
+  .step.done b { color: var(--ok); }
+  @media (max-width: 560px) {
+    .pipeline { grid-template-columns: 1fr; gap: 10px; }
+    .step, .step + .step { padding: 0 0 0 0; display: flex; align-items: baseline; gap: 10px; }
+    .step + .step::before { display: none; }
+    .step b { font-size: 20px; min-width: 34px; }
+  }
+
+  .figures { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+  .figures div b { font-size: 22px; font-weight: 700; display: block; }
+  .figures div span { font-size: 12.5px; color: var(--muted); }
+  @media (max-width: 560px) { .figures { grid-template-columns: repeat(2, 1fr); } }
+  .bars { display: flex; align-items: flex-end; gap: 3px; height: 120px; padding-top: 6px; }
+  .bars span { flex: 1; background: var(--ink); border-radius: 3px 3px 0 0; min-height: 2px; opacity: .9; }
+  .bars span.zero { background: var(--line); opacity: 1; }
+  .bars-axis { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+
+  .rows { list-style: none; margin: 0; padding: 0; }
+  .rows li { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 11px 0; border-top: 1px solid var(--line); }
+  .rows li:first-child { border-top: 0; padding-top: 2px; }
+  .rows .title { font-weight: 600; }
+  .rows .sub { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
+  .rows .amount { font-weight: 700; text-align: right; }
+
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; background: var(--line); }
+  .dot.open { background: var(--ok); box-shadow: 0 0 0 4px rgba(31, 138, 91, .15); }
+  .dot.fail { background: var(--bad); }
+  .badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .badge.awaiting_fee, .badge.booked { background: rgba(183, 121, 31, .14); color: var(--wait); }
+  .badge.new, .badge.in_progress { background: var(--ink-soft); color: var(--ink); }
+  .badge.paid, .badge.done { background: rgba(31, 138, 91, .14); color: var(--ok); }
+  .badge.cancelled { background: var(--line); color: var(--muted); }
+  .badge.err { background: rgba(194, 65, 12, .12); color: var(--bad); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .chip { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 999px; padding: 5px 11px; font-size: 13px; cursor: pointer; }
+  .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
+
+  .empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+  .notice { font-size: 13px; color: var(--muted); margin: -6px 0 12px; }
+  .error-box { background: var(--surface); border-radius: var(--r-lg); padding: 22px; }
+  .error-box h2 { color: var(--bad); }
+  @media (prefers-reduced-motion: no-preference) {
+    .stamp { animation: stamp .45s cubic-bezier(.2, 1.4, .4, 1) both; }
+    @keyframes stamp { from { transform: rotate(-3deg) scale(1.25); opacity: 0; } to { transform: rotate(-3deg) scale(1); opacity: 1; } }
+  }
+</style>
+</head>
+<body>
+<main id="app" aria-live="polite">
+  <header>
+    <div><h1>Кабинет</h1><p class="muted" id="updated">Загружаю данные…</p></div>
+    <button class="refresh" id="refresh" type="button">Обновить</button>
+  </header>
+</main>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg && tg.initData) {
+  tg.ready(); tg.expand();
+  document.documentElement.dataset.theme = tg.colorScheme === "dark" ? "dark" : "light";
+}
+const params = new URLSearchParams(location.search);
+const key = params.get("key");
+const app = document.getElementById("app");
+let data = null, filter = "open", chart = null;
+
+const OPEN = ["awaiting_fee", "new", "in_progress", "booked", "paid"];
+const eur = v => (v == null ? "—" : new Intl.NumberFormat("ru-RU", { maximumFractionDigits: v % 1 ? 2 : 0 }).format(v) + " €");
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const d = iso => iso ? new Date(iso + (iso.length === 10 ? "T00:00:00" : "")) : null;
+const dmy = iso => iso ? d(iso).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }) : "";
+const dm = iso => iso ? d(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short" }) : "";
+function ago(iso) {
+  if (!iso) return "никогда";
+  const m = Math.round((Date.now() - d(iso)) / 60000);
+  if (m < 1) return "только что";
+  if (m < 60) return `${m} мин назад`;
+  if (m < 1440) return `${Math.round(m / 60)} ч назад`;
+  return dmy(iso);
+}
+const plural = (n, one, few, many) => {
+  const a = Math.abs(n) % 100, b = a % 10;
+  return a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many;
+};
+
+async function load() {
+  const headers = {};
+  if (tg && tg.initData) headers["X-Init-Data"] = tg.initData;
+  if (key) headers["X-Panel-Key"] = key;
+  try {
+    const r = await fetch("/api/panel", { headers, cache: "no-store" });
+    if (r.status === 401) return fail("Нет доступа", "Открой кабинет кнопкой в /admin в боте или по ссылке из команды /panel.");
+    if (!r.ok) return fail("Не удалось загрузить данные", "Сервер ответил ошибкой. Попробуй обновить через минуту.");
+    data = await r.json();
+    render();
+  } catch (e) {
+    fail("Нет связи с сервером", "Проверь интернет и нажми «Обновить».");
+  }
+}
+
+function fail(title, text) {
+  app.querySelectorAll("section, .error-box").forEach(n => n.remove());
+  document.getElementById("updated").textContent = "";
+  app.insertAdjacentHTML("beforeend", `<div class="error-box"><h2>${title}</h2><p class="muted">${text}</p></div>`);
+}
+
+function render() {
+  app.querySelectorAll("section, .error-box").forEach(n => n.remove());
+  document.getElementById("updated").textContent = "Обновлено " + new Date(data.generated_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const u = data.users, m = data.money;
+
+  app.insertAdjacentHTML("beforeend", `
+  <section class="hero" aria-label="Деньги">
+    <div class="stamp"><div class="stamp-inner">
+      <small>Выручка сервиса за 30 дней</small>
+      <strong>${eur(m.revenue_30d)}</strong>
+      <em>${new Date().toLocaleDateString("ru-RU", { day: "2-digit", month: "short", year: "numeric" })}</em>
+    </div></div>
+    <div class="facts">
+      <div class="fact"><b>${eur(m.revenue_total)}</b><span>выручка за всё время</span></div>
+      <div class="fact"><b>${eur(m.fees_total)}</b><span>собрано сборов, они уходят визовым центрам</span></div>
+    </div>
+  </section>
+
+  <section aria-label="Заявки">
+    <h2>Заявки</h2>
+    <div class="panel pipeline">
+      ${data.pipeline.map(s => `<div class="step ${s.key === "awaiting_fee" || s.key === "booked" ? (s.n ? "hot" : "") : s.key === "paid" ? "done" : ""}">
+        <b>${s.n}</b><span>${esc(s.label.replace(/^[^\wа-яё]+\s*/i, ""))}</span></div>`).join("")}
+    </div>
+  </section>
+
+  <div class="grid-2">
+    <section aria-label="Пользователи">
+      <h2>Пользователи</h2>
+      <div class="panel">
+        <div class="figures">
+          <div><b>${u.total}</b><span>всего</span></div>
+          <div><b>${u.new_7d}</b><span>новых за неделю</span></div>
+          <div><b>${u.active_7d}</b><span>активных за неделю</span></div>
+          <div><b>${u.with_orders}</b><span>оставили заявку</span></div>
+        </div>
+        <div class="bars" role="img" aria-label="Новые пользователи по дням за 30 дней">${bars()}</div>
+        <div class="bars-axis"><span>${dm(data.daily_users[0]?.day)}</span><span>новые по дням, ${u.new_30d} за 30 дней</span><span>сегодня</span></div>
+      </div>
+    </section>
+    <section aria-label="Откуда приходят">
+      <h2>Откуда приходят</h2>
+      <div class="panel">
+        ${data.sources.length ? `<ul class="rows">${data.sources.map(s => `<li><span class="title">${esc(s.source)}</span>
+          <span class="amount">${s.n}</span><span class="sub">+${s.n_7d} за неделю</span></li>`).join("")}</ul>`
+          : `<p class="empty">Пока никого. Сделай ссылку с меткой командой /link в боте.</p>`}
+        <p class="notice" style="margin:12px 0 0">Вопросов в поддержку за неделю: ${data.support.questions_7d}. Запросов на сбор документов за 30 дней: ${data.support.docs_requests_30d}.</p>
+      </div>
+    </section>
+  </div>
+
+  <section aria-label="Слоты">
+    <h2>Слоты по странам</h2>
+    ${data.slots_since ? `<p class="notice">Статистика за 30 дней, данные собираются с ${dmy(data.slots_since)}.</p>` : ""}
+    <div class="panel"><ul class="rows">
+      ${data.slots.map(s => `<li>
+        <span class="title"><span class="dot ${s.failing >= 3 ? "fail" : s.open_now ? "open" : ""}"></span>${esc(s.name)}</span>
+        <span>${s.open_now ? `<span class="badge paid">есть слот ${dm(s.earliest)}</span>` : s.failing >= 3 ? `<span class="badge err">не проверяется</span>` : `<span class="muted">нет слотов</span>`}</span>
+        <span class="sub">Открывались ${s.openings} ${plural(s.openings, "раз", "раза", "раз")}, доступны ${s.availability}% времени. Проверено ${ago(s.last_ok)}.</span>
+      </li>`).join("")}
+    </ul></div>
+  </section>
+
+  <div class="grid-2">
+    <section aria-label="Оплаты">
+      <h2>Оплаты</h2>
+      <div class="panel">
+        ${data.payments.length ? `<ul class="rows">${data.payments.map(p => `<li>
+          <span class="title">#${p.id} ${esc(p.country)}</span>
+          <span class="amount">${eur((p.service || 0) + (p.fee || 0))}</span>
+          <span class="sub">${[p.service != null ? `сервис ${eur(p.service)} ${ago(p.service_at)}${p.service_paid ? ", " + esc(p.service_paid) : ""}` : "",
+                               p.fee != null ? `сбор ${eur(p.fee)} ${ago(p.fee_at)}` : ""].filter(Boolean).join("; ")}</span>
+        </li>`).join("")}</ul>` : `<p class="empty">Оплат пока нет. Первая появится здесь сразу после оплаты счёта.</p>`}
+      </div>
+    </section>
+    <section aria-label="Последние заявки">
+      <h2>Последние заявки</h2>
+      <div class="panel">
+        <div class="chips" role="group" aria-label="Фильтр заявок">
+          ${[["open", "Открытые"], ["all", "Все"], ["cancelled", "Отменённые"]].map(([k, l]) =>
+            `<button class="chip" type="button" data-filter="${k}" aria-pressed="${filter === k}">${l}</button>`).join("")}
+        </div>
+        <ul class="rows" id="orders"></ul>
+      </div>
+    </section>
+  </div>`);
+
+  renderOrders();
+  app.querySelectorAll(".chip").forEach(b => b.addEventListener("click", () => { filter = b.dataset.filter; render(); }));
+}
+
+function bars() {
+  const max = Math.max(1, ...data.daily_users.map(x => x.n));
+  return data.daily_users.map(x =>
+    `<span class="${x.n ? "" : "zero"}" style="height:${Math.max(2, Math.round(100 * x.n / max))}%" title="${dm(x.day)}: ${x.n} ${plural(x.n, "новый", "новых", "новых")}"></span>`).join("");
+}
+
+function renderOrders() {
+  const list = data.orders.filter(o => filter === "all" ? true : filter === "open" ? OPEN.includes(o.status) : o.status === filter);
+  document.getElementById("orders").innerHTML = list.length ? list.map(o => `<li>
+      <span class="title">#${o.id} ${esc(o.country)}</span>
+      <span class="badge ${o.status}">${esc(o.status_label.replace(/^[^\wа-яё]+\s*/i, ""))}</span>
+      <span class="sub">${o.appointment ? "Запись: " + esc(o.appointment) : o.date_from ? `Даты ${dmy(o.date_from)}${o.date_to ? "–" + dmy(o.date_to) : " и позже"}` : "Любые даты"}.
+        ${o.price != null ? "Сервис " + eur(o.price) + (o.fee ? ", сбор " + eur(o.fee) : "") + "." : o.fee ? "Сбор " + eur(o.fee) + "." : ""}
+        Создана ${ago(o.created)}.</span>
+    </li>`).join("") : `<li class="empty">Нет заявок в этом списке.</li>`;
+}
+
+document.getElementById("refresh").addEventListener("click", load);
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
