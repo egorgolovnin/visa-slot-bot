@@ -315,7 +315,9 @@ class Poller:
 
     async def probe_vfs_login(self) -> None:
         from . import cf, mailbox, vfs_auth
-        if not vfs_auth.accounts() or await self.db.kv_get("vfs_login_probe") == "v3":
+        if not vfs_auth.accounts() or not (cf.enabled() or self.s.proxy_url):
+            return  # no Cloudflare bypass available yet: skip login probe to avoid noisy errors
+        if await self.db.kv_get("vfs_login_probe") == "v3":
             return
         await self.db.kv_set("vfs_login_probe", "v3")
 
