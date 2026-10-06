@@ -313,6 +313,27 @@ class Poller:
             await self.alert_admins(f"⚠️ Автовход в VFS (Австрия) пока не прошёл: <code>{str(e)[:200]}</code>\n"
                                     "Разберусь дальше; на MVP не влияет — бронируешь вручную.")
 
+    async def probe_vfs_login(self) -> None:
+        from . import cf, mailbox, vfs_auth
+        if not vfs_auth.accounts() or await self.db.kv_get("vfs_login_probe") == "v3":
+            return
+        await self.db.kv_set("vfs_login_probe", "v3")
+
+        async def wait(**kw):
+            return await mailbox.wait_for(**kw) if mailbox.enabled() else None
+        try:
+            c = await cf.clearance("cyp", "aut") if cf.enabled() else None
+            log.info("cf clearance for probe: %s", bool(c))
+            sess = await vfs_auth.login_austria(wait, self.s.proxy_url)
+            if sess and sess.alive:
+                await self.alert_admins("✅ Автовход в VFS (Австрия) работает через FlareSolverr, без прокси и капчи. "
+                                        "Делаю автобронь.")
+            else:
+                await self.alert_admins("⚠️ Автовход в VFS (Австрия): токен не получен. Смотрю логи.")
+        except Exception as e:
+            log.warning("vfs login probe: %s", e)
+            await self.alert_admins(f"⚠️ Автовход в VFS (Австрия): <code>{str(e)[:250]}</code>")
+
     async def run(self) -> None:
         log.info("poller started, proxy=%s", bool(self.s.proxy_url))
         await self.register_static()
@@ -320,6 +341,10 @@ class Poller:
             await self.probe_vfs_fields()
         except Exception:
             log.exception("vfs fields probe")
+        try:
+            await self.probe_vfs_login()
+        except Exception:
+            log.exception("vfs login probe")
         await self.import_open_cases()
         asyncio.create_task(self.discover_abroad())
         last_discover = await self.db.last_discovery()

@@ -75,10 +75,17 @@ class VfsSession:
         return AsyncSession(impersonate=self.impersonate, proxies=proxies, timeout=40)
 
     async def login(self, email: str, password: str, turnstile: str | None = None, otp: str | None = None) -> None:
+        from . import cf
+        clearance = await cf.clearance(self.country, self.mission) if cf.enabled() else None
+        ua = (clearance or {}).get("user_agent") or UA
+        if clearance:
+            self.cookies.update(clearance["cookies"])
         base = {"accept-language": "en-US,en;q=0.9", "origin": "https://visa.vfsglobal.com",
                 "referer": "https://visa.vfsglobal.com/", "route": f"{self.country}/en/{self.mission}",
-                "user-agent": UA}
+                "user-agent": ua}
         async with self._session() as s:
+            if self.cookies:
+                s.cookies.update(self.cookies)
             try:
                 await s.get(f"https://visa.vfsglobal.com/{self.country}/en/{self.mission}/login",
                             headers={"accept": "text/html", "user-agent": UA})
@@ -96,11 +103,13 @@ class VfsSession:
                        "cfmlift": "mobile", "content-type": "application/json"}
             r = await s.post(f"{LIFT}/user/login", headers=headers, json=payload)
             text = r.text or ""
-            if r.status_code == 403 and "Just a moment" in text[:200]:
-                raise LoginError("cloudflare block at login (need Turnstile / proxy)")
+            if r.status_code == 403 and ("Just a moment" in text[:300] or "<!DOCTYPE" in text[:50]):
+                cf.drop(self.country, self.mission)  # stale clearance: next try re-solves
+                raise LoginError("cloudflare block at login (clearance stale or IP flagged)")
             try:
                 data = json.loads(text)
             except json.JSONDecodeError:
+                cf.drop(self.country, self.mission)
                 raise LoginError(f"non-JSON login response: {text[:150]}")
             if r.status_code == 429 or str(data.get("code")) in ("429001", "429201"):
                 raise LoginError(f"rate limited: {data.get('code')}")
