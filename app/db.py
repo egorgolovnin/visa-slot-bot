@@ -654,3 +654,25 @@ class Database:
     async def cancel_direct_for_order(self, order_id: int) -> None:
         await self.pool.execute(
             "UPDATE direct_payments SET status = 'cancelled' WHERE order_id = $1 AND status = 'pending'", order_id)
+
+    # ---- funnel ----
+    async def funnel(self, days: int) -> list:
+        """Distinct users per form step over the period, plus order milestones."""
+        return await self.pool.fetch(
+            """SELECT payload AS step, count(DISTINCT tg_id) AS users FROM user_events
+               WHERE kind = 'fstep' AND at > now() - make_interval(days => $1) GROUP BY payload""", days)
+
+    async def funnel_orders(self, days: int):
+        return await self.pool.fetchrow(
+            """SELECT count(DISTINCT tg_id) AS submitted,
+                      count(DISTINCT tg_id) FILTER (WHERE fee_paid_at IS NOT NULL OR fee_eur = 0) AS fee_ok,
+                      count(DISTINCT tg_id) FILTER (WHERE booked_at IS NOT NULL) AS booked,
+                      count(DISTINCT tg_id) FILTER (WHERE paid_at IS NOT NULL) AS paid
+               FROM orders WHERE created_at > now() - make_interval(days => $1)""", days)
+
+    async def abandoned_forms(self, min_minutes: int = 0) -> list:
+        """Forms in progress: who, at which step, since when."""
+        return await self.pool.fetch(
+            """SELECT key, state, data, updated_at FROM fsm
+               WHERE state LIKE 'NewOrder:%' AND updated_at < now() - make_interval(mins => $1)
+               ORDER BY updated_at DESC""", min_minutes)

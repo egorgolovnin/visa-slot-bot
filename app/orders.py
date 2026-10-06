@@ -165,8 +165,21 @@ def step_kb(step: str):
     return kb.as_markup()
 
 
+async def log_step(db_or_none, uid: int | None, step: str) -> None:
+    if db_or_none and uid:
+        try:
+            await db_or_none.log_event(uid, "fstep", step)
+        except Exception:
+            pass
+
+
+_DB_FOR_STEPS: list = []  # set at startup so ask() can log without threading db through every call
+
+
 async def ask(message: Message, state: FSMContext, step: str, prefix: str = "") -> None:
     data = await state.get_data()
+    if _DB_FOR_STEPS:
+        await log_step(_DB_FOR_STEPS[0], message.chat.id, step)
     if step == "count":
         await state.set_state(NewOrder.count)
         kb = InlineKeyboardBuilder()
@@ -305,6 +318,7 @@ async def order_start(message: Message, state: FSMContext, db: Database, setting
                       uid: int | None = None) -> None:
     uid = uid or message.from_user.id
     await state.clear()
+    await log_step(db, uid, "start")
     if not security.enabled():
         await message.answer("Заявки временно недоступны.")
         return
@@ -377,6 +391,7 @@ async def order_destination(call: CallbackQuery, state: FSMContext, db: Database
         await call.answer()
         return
     await state.clear()
+    await log_step(db, call.from_user.id, "destination")
     tg = f"@{call.from_user.username}" if call.from_user.username else None
     await state.update_data(mission=mission, destination=key, mission_name=name, note=note, tg_contact=tg,
                             region=region_of(key))
@@ -395,6 +410,9 @@ async def order_destination(call: CallbackQuery, state: FSMContext, db: Database
 
 @router.callback_query(F.data == "ord:cancel")
 async def order_cancel_cb(call: CallbackQuery, state: FSMContext) -> None:
+    current = (await state.get_state() or "").split(":")[-1]
+    if _DB_FOR_STEPS and current:
+        await _DB_FOR_STEPS[0].log_event(call.from_user.id, "fcancel", current)
     await state.clear()
     try:
         await call.message.edit_text("Заявка отменена. Начать заново — /order")
@@ -743,6 +761,11 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
         window = f"{fmt_date(d1)}–{fmt_date(date.fromisoformat(data['date_to']))}" if data.get("date_to") else f"с {fmt_date(d1)}"
     else:
         window = "любые"
+    await log_step(db, message.chat.id, "confirm")
+    from .checks import check_people
+    d_from = date.fromisoformat(data["date_from"]) if data.get("date_from") else None
+    d_to = date.fromisoformat(data["date_to"]) if data.get("date_to") else None
+    warnings = check_people(people, d_from, d_to)
     each = f" × {n} = <b>{price * n:.0f} €</b>" if n > 1 else ""
     fee_each = f" × {n} = <b>{fee * n:.2f} €</b>" if n > 1 else ""
     text = (
@@ -761,6 +784,8 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
         + (f"🏛 В день подачи каждый оплачивает сам: {requirements(data['mission']).at_centre}."
            + (" Для детей консульский сбор меньше: 6–12 лет — 45 €, до 6 лет — бесплатно." if _has_child(people) else "")
            + "\n\n" if requirements(data["mission"]).at_centre else "")
+        + (("⚠️ <b>Проверь перед отправкой:</b>\n" + "\n".join(f"• {html.escape(w)}" for w in warnings) + "\n\n")
+           if warnings else "")
         + CONSENT + (FEE_NOTE if fee else "")
     )
     kb = InlineKeyboardBuilder()
@@ -865,6 +890,7 @@ async def _order_confirm(call: CallbackQuery, state: FSMContext, db: Database, s
     order_id = await db.create_order(call.from_user.id, data["mission"], d_from, d_to, security.encrypt(applicant),
                                      destination=data.get("destination"), fee=fee, people=n)
     await db.log_event(call.from_user.id, "order_new", f"#{order_id} {data.get('destination')}")
+    await log_step(db, call.from_user.id, "submitted")
     await call.answer()
     if fee > 0:
         await call.message.edit_text(f"✅ Заявка <b>#{order_id}</b> принята: {html.escape(data['mission_name'])}.")
@@ -875,6 +901,10 @@ async def _order_confirm(call: CallbackQuery, state: FSMContext, db: Database, s
             f"✅ Заявка <b>#{order_id}</b> принята: {html.escape(data['mission_name'])}.\n"
             "Как только поймаем слот и запишем тебя — пришлю подтверждение и детали. Статус — /myorders")
         header = "🆕 Новая заявка" + (f" на {n} чел." if n > 1 else "")
+    from .checks import duplicate_passports
+    dups = await duplicate_passports(db, people, call.from_user.id, exclude_order=order_id)
+    if dups:
+        header += "\n⚠️ " + "; ".join(dups)
     for admin_id in settings.admin_ids:
         await send_admin_card(call.bot, db, admin_id, order_id, settings, header=header)
 
@@ -1036,6 +1066,12 @@ def admin_card_text(o, tz: ZoneInfo) -> str:
             lines.append(f"France-Visas: <code>{html.escape(p['reference'])}</code>")
         if p.get("residence_exp") or p.get("residence_receipt"):
             lines.append(f"ВНЖ: до {_d(p['residence_exp'])}" if p.get("residence_exp") else "ВНЖ: ⚠️ на продлении (ресипт)")
+    from .checks import check_people
+    warns = check_people(people, o["date_from"], o["date_to"]) if people and people[0] else []
+    if warns:
+        lines.append("")
+        lines.append("⚠️ <b>Проверка данных:</b>")
+        lines += [f"• {html.escape(w)}" for w in warns]
     lines.append("")
     lines.append((f"Тел: <code>{html.escape(a['phone'])}</code>" if a.get("phone") else "Тел: —")
                  + (f" · <code>{html.escape(a['email'])}</code>" if a.get("email") else ""))
@@ -1368,6 +1404,8 @@ async def payment_watcher(bot: Bot, db: Database, settings: Settings, every: int
                 await auto_complete(bot, db, settings)
                 await db.purge_stale_forms(hours=48)
                 await send_reminders(bot, db, settings)
+            if tick % 10 == 2:
+                await nudge_abandoned(bot, db)
                 purged = await db.purge_old_applicant_data(days=60)
                 if purged:
                     log.info("wiped applicant data of %d finished orders", purged)
@@ -1459,6 +1497,50 @@ async def client_redate_window(message: Message, state: FSMContext, db: Database
     await message.answer(f"Готово: ищем слот по заявке #{oid} на даты {window} ✓")
     for a in settings.admin_ids:
         await notify_client(message.bot, a, f"🗓 Заявка #{oid}: клиент указал новые даты — {window}.")
+
+
+STEP_RU = {"window": "даты", "count": "сколько человек", "same_day": "один день или нет", "full_name": "имя",
+           "gender": "пол", "birth": "дата рождения", "nationality": "гражданство", "passport": "номер паспорта",
+           "passport_exp": "срок паспорта", "reference": "номер France-Visas", "passport_scan": "скан паспорта",
+           "residence_exp": "ВНЖ", "phone": "телефон", "confirm": "проверка заявки"}
+
+
+async def nudge_abandoned(bot: Bot, db: Database) -> None:
+    """A form untouched for 2 hours gets one friendly reminder (forms are purged after 48 hours)."""
+    import json
+    for r in await db.abandoned_forms(min_minutes=120):
+        data = r["data"] if isinstance(r["data"], dict) else json.loads(r["data"] or "{}")
+        if data.get("nudged"):
+            continue
+        uid = int(r["key"].split(":")[1])
+        step = r["state"].split(":")[-1]
+        country = data.get("mission_name") or "визу"
+        kb = InlineKeyboardBuilder()
+        kb.button(text="▶️ Продолжить", callback_data="ord:resume")
+        kb.button(text="✖️ Не нужно", callback_data="ord:cancel")
+        kb.adjust(2)
+        try:
+            await bot.send_message(uid, f"Ты не закончил заявку на {html.escape(country)} — остановился на шаге "
+                                        f"«{STEP_RU.get(step, step)}». Продолжим? Всё, что ты ввёл, сохранено.",
+                                   reply_markup=kb.as_markup())
+        except Exception:
+            pass
+        data["nudged"] = True
+        await db.pool.execute("UPDATE fsm SET data = $2::jsonb WHERE key = $1", r["key"], json.dumps(data, ensure_ascii=False, default=str))
+        await db.log_event(uid, "fnudge", step)
+
+
+@router.callback_query(F.data == "ord:resume")
+async def order_resume(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
+    step = (await state.get_state() or "").split(":")[-1]
+    await call.answer()
+    await db.log_event(call.from_user.id, "fresume", step)
+    if step == "confirm":
+        await show_confirm(call.message, state, db, settings)
+    elif step in QUESTIONS or step in ("count", "same_day"):
+        await ask(call.message, state, step if step != "same_day" else "count")
+    else:
+        await call.message.answer("Анкета уже закрыта. Начать заново — /order")
 
 
 async def weekly_slots_report(bot: Bot, db: Database, settings: Settings) -> None:

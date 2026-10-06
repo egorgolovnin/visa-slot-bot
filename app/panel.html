@@ -97,6 +97,13 @@
   .figures div b { font-size: 22px; font-weight: 700; display: block; }
   .figures div span { font-size: 12.5px; color: var(--muted); }
   @media (max-width: 560px) { .figures { grid-template-columns: repeat(2, 1fr); } }
+  .frow { display: grid; grid-template-columns: 11rem 1fr 6.5rem; gap: 10px; align-items: center; padding: 5px 0; font-size: 14px; }
+  .fbar { height: 10px; background: var(--line); border-radius: 999px; overflow: hidden; }
+  .fbar i { display: block; height: 100%; background: var(--ink); border-radius: 999px; }
+  .fnum { text-align: right; color: var(--muted); }
+  .fnum b { color: var(--text); }
+  .fnum em { font-style: normal; color: var(--bad); }
+  @media (max-width: 560px) { .frow { grid-template-columns: 1fr 5.5rem; } .fbar { grid-column: 1 / -1; order: 3; } }
   .bars { display: flex; align-items: flex-end; gap: 3px; height: 120px; padding-top: 6px; }
   .bars span { flex: 1; background: var(--ink); border-radius: 3px 3px 0 0; min-height: 2px; opacity: .9; }
   .bars span.zero { background: var(--line); opacity: 1; }
@@ -218,6 +225,11 @@ function render() {
     </div>
   </section>
 
+  <section aria-label="Воронка">
+    <h2>Воронка заявки, 30 дней</h2>
+    <div class="panel">${funnelHtml()}</div>
+  </section>
+
   <div class="grid-2">
     <section aria-label="Пользователи">
       <h2>Пользователи</h2>
@@ -281,6 +293,17 @@ function render() {
 
   renderOrders();
   app.querySelectorAll(".chip").forEach(b => b.addEventListener("click", () => { filter = b.dataset.filter; render(); }));
+}
+
+function funnelHtml() {
+  const f = data.funnel;
+  if (!f || !f.rows.length) return `<p class="empty">Пока никто не начинал заявку.</p>`;
+  const rows = f.rows.map(r => `<div class="frow">
+      <span class="flabel">${esc(r.label)}</span>
+      <span class="fbar"><i style="width:${Math.max(2, r.pct)}%"></i></span>
+      <span class="fnum"><b>${r.users}</b> ${r.pct}%${r.drop ? ` <em>${r.drop} ${esc(r.note)}</em>` : ""}</span></div>`).join("");
+  const stuck = f.stuck.length ? `<p class="notice" style="margin:12px 0 0">Сейчас застряли в анкете: ${f.stuck.map(s => `${esc(s.step)} — ${s.n}`).join(", ")}.</p>` : "";
+  return rows + stuck;
 }
 
 function bars() {

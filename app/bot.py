@@ -361,6 +361,7 @@ def admin_keyboard():
     kb.button(text="📈 По дням", callback_data="adm:days")
     kb.button(text="📋 Заявки", callback_data="adm:orders")
     kb.button(text="📊 Слоты", callback_data="adm:slots")
+    kb.button(text="🧭 Воронка", callback_data="adm:funnel")
     kb.adjust(*([1] if public_url() else []), 2, 2, 2)
     return kb.as_markup()
 
@@ -465,6 +466,9 @@ async def admin_cb(call: CallbackQuery, db: Database, settings: Settings, poller
         text, kb = await dashboard_text(db), admin_keyboard()
     elif parts[1] == "users":
         text, kb = await users_text(db, int(parts[2]), tz)
+    elif parts[1] == "funnel":
+        from . import funnel
+        text, kb = funnel.text(await funnel.build(db, 30)), back.as_markup()
     elif parts[1] == "slots":
         from .slotstats import report
         text, kb = report(await db.observations(30), 30, settings.tz, await db.first_observation()), back.as_markup()

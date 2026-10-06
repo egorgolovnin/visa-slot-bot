@@ -41,6 +41,7 @@ async def main() -> None:
         return False
 
     poller = Poller(settings, db, notify)
+    orders._DB_FOR_STEPS.append(db)
     storage = PgStorage(db)
     await storage.init()
     dp = Dispatcher(storage=storage, db=db, settings=settings, poller=poller)

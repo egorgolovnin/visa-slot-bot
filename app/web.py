@@ -68,6 +68,11 @@ def _num(v):
     return float(v) if v is not None else 0.0
 
 
+async def _funnel(db: Database) -> dict:
+    from . import funnel
+    return await funnel.build(db, 30)
+
+
 async def collect(db: Database, settings: Settings, poller) -> dict:
     from .orders import DESTINATIONS, STATUS
     from .slotstats import compute
@@ -134,6 +139,7 @@ async def collect(db: Database, settings: Settings, poller) -> dict:
         "support": {"questions_7d": await db.support_count(7), "docs_requests_30d": await db.event_total("docs_request", 30)},
         "slots": slots,
         "slots_since": first_obs.isoformat() if first_obs else None,
+        "funnel": await _funnel(db),
     }
 
 
