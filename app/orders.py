@@ -371,9 +371,12 @@ async def send_destinations(message: Message, db: Database, settings: Settings, 
         if mission in offered and mission not in taken and region_of(key) == region:
             kb.button(text=name, callback_data=f"ord:d:{key}")
             n += 1
+    from . import gform
+    if gform.enabled():
+        kb.button(text="📝 Удобнее в Google Форме", callback_data="gf:link")
     kb.button(text=f"📂 Собрать документы за меня — {settings.docs_price:.0f} €", callback_data="docs:req")
     kb.button(text="✖️ Отмена", callback_data="ord:cancel")
-    kb.adjust(*([2] * (n // 2)), *([1] if n % 2 else []), 1, 1)  # countries in pairs, then two wide buttons
+    kb.adjust(*([2] * (n // 2)), *([1] if n % 2 else []), 1, 1, 1)
     await message.answer("<b>Заявка на запись</b>\nВ какую страну едешь (основная страна поездки)?",
                          reply_markup=kb.as_markup())
 
@@ -1567,6 +1570,51 @@ async def auto_complete(bot: Bot, db: Database, settings: Settings) -> None:
         if d and d < date.today() - timedelta(days=1):
             await db.update_order(r["id"], status="done")
             log.info("order #%s auto-completed (appointment %s passed)", r["id"], d)
+
+
+# ---------------- Google Form ----------------
+@router.callback_query(F.data == "gf:link")
+async def gform_link(call: CallbackQuery, state: FSMContext, db: Database) -> None:
+    from . import gform
+    await call.answer()
+    if not gform.enabled():
+        return
+    await state.clear()
+    await log_step(db, call.from_user.id, "form_link")
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📝 Открыть форму", url=await gform.link_for(db, call.from_user.id))
+    await call.message.answer("Вот твоя личная ссылка на форму — в ней уже есть скрытый код, по которому мы поймём, "
+                              "что это ты. Не пересылай её другим. После отправки формы заявка появится здесь, в боте.",
+                              reply_markup=kb.as_markup())
+
+
+@router.message(F.photo | F.document, StateFilter(None))
+async def scan_after_form(message: Message, db: Database, settings: Settings) -> None:
+    """Passport scan sent after a Google Form order (forms can't take files without a Google login)."""
+    from aiogram.dispatcher.event.bases import SkipHandler
+    oid = await db.kv_get(f"await_scan:{message.from_user.id}")
+    if not oid:
+        raise SkipHandler()
+    from aiogram.types import BufferedInputFile
+    from .sanitize import clean_file
+    if message.photo:
+        fid, mime, name = message.photo[-1].file_id, "image/jpeg", "passport.jpg"
+    else:
+        fid, mime, name = message.document.file_id, message.document.mime_type, message.document.file_name
+    raw = await message.bot.download(fid)
+    data, new_name = clean_file(raw.read(), mime, name, f"passport_{oid}")
+    admin = next(iter(settings.admin_ids))
+    stored = await message.bot.send_document(admin, BufferedInputFile(data, filename=new_name),
+                                             caption=f"📎 Скан паспорта к заявке #{oid} (из формы)")
+    o = await db.order(int(oid))
+    a = security.decrypt(o["applicant"]) if o else {}
+    people = a.get("people") or [a]
+    if people:
+        people[0]["passport_scan"] = stored.document.file_id
+        a["people"] = people
+        await db.update_order(int(oid), applicant=security.encrypt(a))
+    await db.kv_set(f"await_scan:{message.from_user.id}", "")
+    await message.answer("Скан получен ✓ Спасибо!")
 
 
 # ---------------- direct USDT payments ----------------

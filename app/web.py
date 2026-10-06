@@ -216,6 +216,20 @@ def make_app(db: Database, settings: Settings, poller) -> web.Application:
         return web.json_response(await cases_data(db), headers={"Cache-Control": "public, max-age=300"},
                                  dumps=lambda o: json.dumps(o, ensure_ascii=False, default=str))
 
+    async def form_hook(request: web.Request) -> web.Response:
+        from .gform import handle_submission
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad json"}, status=400)
+        bot = request.app.get("bot")
+        try:
+            return web.json_response(await handle_submission(bot, db, settings, payload))
+        except Exception as e:
+            log.exception("form hook")
+            return web.json_response({"ok": False, "error": str(e)[:200]}, status=500)
+
+    app.router.add_post("/api/form", form_hook)
     app.router.add_get("/cases", cases_page)
     app.router.add_get("/api/cases", cases_api)
     app.router.add_get("/", health)
@@ -225,12 +239,14 @@ def make_app(db: Database, settings: Settings, poller) -> web.Application:
     return app
 
 
-async def start(db: Database, settings: Settings, poller) -> web.AppRunner | None:
+async def start(db: Database, settings: Settings, poller, bot=None) -> web.AppRunner | None:
     port = os.getenv("PORT")
     if not port:
         log.info("PORT not set, dashboard disabled")
         return None
-    runner = web.AppRunner(make_app(db, settings, poller), access_log=None)
+    app = make_app(db, settings, poller)
+    app["bot"] = bot
+    runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(port)).start()
     log.info("dashboard listening on :%s, public url %s", port, public_url())

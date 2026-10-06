@@ -62,7 +62,7 @@ async def main() -> None:
             log.info("crypto pay ok: %s", await orders.payments.check())
         except Exception as e:
             log.error("crypto pay check failed: %s", e)
-    web_runner = await web.start(db, settings, poller)
+    web_runner = await web.start(db, settings, poller, bot)
     task = asyncio.create_task(poller.run())
     pay_task = asyncio.create_task(orders.payment_watcher(bot, db, settings))
     try:
