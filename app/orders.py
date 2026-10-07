@@ -149,12 +149,30 @@ def is_admin(uid: int, settings: Settings) -> bool:
     return uid in settings.admin_ids
 
 
-async def service_total(db: Database, settings: Settings, mission: str, n: int) -> float:
-    """Total service price for the order: per-person x n, or a family flat rate for n people."""
+def is_family(people: list[dict]) -> bool:
+    """A family package applies to 2 adults + at least one child (under 18)."""
+    if len(people) < 3:
+        return False
+    adults = children = 0
+    for p in people:
+        if (p or {}).get("birth"):
+            b = date.fromisoformat(p["birth"])
+            age = date.today().year - b.year - ((date.today().month, date.today().day) < (b.month, b.day))
+            if age < 18:
+                children += 1
+            else:
+                adults += 1
+        else:
+            adults += 1
+    return len(people) == 3 and adults == 2 and children >= 1
+
+
+async def service_total(db: Database, settings: Settings, mission: str, people: list[dict]) -> float:
+    """Total service price: family flat rate for 2 adults + a child, otherwise per-person x count."""
     per = await db.price(mission, settings.default_price)
-    if n in settings.family_prices:
-        return settings.family_prices[n]
-    return per * n
+    if is_family(people):
+        return settings.family_price
+    return per * max(1, len(people))
 
 
 def step_kb(step: str):
@@ -766,7 +784,7 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
     people = data.get("people") or []
     n = max(1, len(people))
     per = await db.price(data["mission"], settings.default_price)
-    price_total = await service_total(db, settings, data["mission"], n)
+    price_total = await service_total(db, settings, data["mission"], people)
     fee = await db.fee(data["mission"])
     if data.get("date_from"):
         d1 = date.fromisoformat(data["date_from"])
@@ -778,8 +796,8 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
     d_from = date.fromisoformat(data["date_from"]) if data.get("date_from") else None
     d_to = date.fromisoformat(data["date_to"]) if data.get("date_to") else None
     warnings = check_people(people, d_from, d_to)
-    family = n in settings.family_prices
-    each = (f" — пакет на {n} чел.: <b>{price_total:.0f} €</b>" if family
+    family = is_family(people)
+    each = (f" — семейный пакет (2 взрослых + ребёнок): <b>{price_total:.0f} €</b>" if family
             else f" × {n} = <b>{price_total:.0f} €</b>") if n > 1 else ""
     fee_each = f" × {n} = <b>{fee * n:.2f} €</b>" if n > 1 else ""
     text = (
@@ -1170,7 +1188,7 @@ async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, sett
         await state.set_state(Booking.details)
         await state.update_data(order_id=oid)
         price = (o["price_eur"] if o["price_eur"] is not None
-                 else await service_total(db, settings, o["mission"], o["people"] or 1))
+                 else await service_total(db, settings, o["mission"], applicant_people(security.decrypt(o["applicant"]))))
         cancel_kb = InlineKeyboardBuilder()
         cancel_kb.button(text="✖️ Не сейчас", callback_data="oa:bookcancel:0")
         await call.message.answer(reply_markup=cancel_kb.as_markup(), text=
@@ -1226,7 +1244,7 @@ async def booking_details(message: Message, state: FSMContext, db: Database, set
         return
     if price is None:
         price = (float(o["price_eur"]) if o["price_eur"] is not None
-                 else await service_total(db, settings, o["mission"], o["people"] or 1))
+                 else await service_total(db, settings, o["mission"], applicant_people(security.decrypt(o["applicant"]))))
     file_id = None
     if message.document:
         # strip metadata (author, software, EXIF) and rename before the client ever sees the file
@@ -1721,9 +1739,7 @@ async def price_cmd(message: Message, command: CommandObject, db: Database, sett
         lines.append(f"<code>{r['code']}</code> {html.escape(r['name'])}: сервис "
                      + (f"{r['price_eur']:.0f} €" if r["price_eur"] is not None else f"{settings.default_price:.0f} €")
                      + (f" + сбор {fee:.2f} € при брони" if fee else " · сбора при брони нет"))
-    if settings.family_prices:
-        fam = ", ".join(f"{k} чел. — {v:.0f} €" for k, v in sorted(settings.family_prices.items()))
-        lines.append(f"\nСемейные пакеты (за всю заявку): {fam}")
+    lines.append(f"\nСемейный пакет (2 взрослых + ребёнок): {settings.family_price:.0f} € за всю заявку")
     lines.append("\nИзменить: /price hun 120 · сбор: /fee svk 29 · проверить оплату: /testinvoice")
     payment_state = "подключена" if payments.enabled() else "не подключена (нужен CRYPTO_PAY_TOKEN)"
     lines.append(f"Оплата Crypto Pay: {payment_state}")
