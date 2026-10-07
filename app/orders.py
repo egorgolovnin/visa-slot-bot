@@ -1288,6 +1288,12 @@ async def notify_client(bot: Bot, uid: int, text: str, **kw) -> bool:
 async def issue_invoice(bot: Bot, db: Database, settings: Settings, oid: int) -> None:
     o = await db.order(oid)
     name = order_country(o)
+    if o["price_eur"] is not None and float(o["price_eur"]) <= 0:
+        # 100% discount: nothing to pay, close the order right after booking
+        await mark_paid(bot, db, settings, oid, "скидка 100%", "0")
+        await notify_client(bot, o["tg_id"], f"🎉 Слот по заявке #{oid} ({html.escape(name)}) забронирован — "
+                            f"<b>{html.escape(o['appointment'] or '')}</b>. Сервис для тебя бесплатный (скидка 100%)!")
+        return
     from .documents import links_html
     docs = links_html(o["mission"], o["destination"])
     head = (f"✅ <b>Слот забронирован!</b>\nЗаявка #{oid}: {html.escape(name)}\n"

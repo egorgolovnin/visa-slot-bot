@@ -16,7 +16,7 @@ from .db import Database
 router = Router()
 
 # fortune wheel: weighted sectors (percent discount -> weight). One spin per user.
-WHEEL = [(5, 35), (10, 30), (15, 20), (20, 12), (30, 3)]
+WHEEL = [(5, 34), (10, 30), (15, 20), (20, 12), (30, 3), (100, 1)]  # 100% is the rare jackpot
 WHEEL_LABELS = [f"{p}%" for p, _ in WHEEL]
 
 
@@ -85,8 +85,10 @@ async def wheel_spin(call: CallbackQuery, db: Database, settings: Settings) -> N
     kb = InlineKeyboardBuilder()
     kb.button(text="📝 Записаться со скидкой", callback_data="go:order")
     try:
-        await msg.edit_text(f"🎉 Выпало <b>{percent}%</b> скидки на сервис!\n"
-                            "Скидка уже на твоём аккаунте и применится к ближайшей заявке.", reply_markup=kb.as_markup())
+        won = (f"🎉 ДЖЕКПОТ! Выпало <b>100%</b> — сервис бесплатно! 🎁"
+               if percent == 100 else f"🎉 Выпало <b>{percent}%</b> скидки на сервис!")
+        await msg.edit_text(won + "\nСкидка уже на твоём аккаунте и применится к ближайшей заявке.",
+                            reply_markup=kb.as_markup())
     except Exception:
         await msg.answer(f"🎉 Выпало {percent}% скидки!")
 
