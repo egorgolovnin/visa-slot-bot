@@ -798,6 +798,9 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
     d_to = date.fromisoformat(data["date_to"]) if data.get("date_to") else None
     warnings = check_people(people, d_from, d_to)
     family = is_family(people)
+    disc = await db.best_discount(message.chat.id)
+    disc_pct = disc["percent"] if disc else 0
+    price_after = round(price_total * (100 - disc_pct) / 100, 2) if disc_pct else price_total
     each = (f" — семейный пакет (2 взрослых + ребёнок): <b>{price_total:.0f} €</b>" if family
             else f" × {n} = <b>{price_total:.0f} €</b>") if n > 1 else ""
     fee_each = f" × {n} = <b>{fee * n:.2f} €</b>" if n > 1 else ""
@@ -811,9 +814,11 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
         + (f"Связь: Telegram {html.escape(data['tg_contact'])} — пишем сюда, в этот чат\n\n" if data.get("tg_contact")
            else "Связь: пишем сюда, в этот чат\n\n")
         + (f"💳 Сбор визового центра: {fee:.2f} €{fee_each or f' — <b>{fee:.2f} €</b>'} — сразу после заявки, без него слот не забронировать\n"
-           f"🤝 Наш сервис: {per:.0f} €{each or f' — <b>{price_total:.0f} €</b>'} — после брони\n"
-           f"Итого: <b>{fee * n + price_total:.2f} €</b>\n\n" if fee else
-           f"Стоимость сервиса: {per:.0f} €" + (each if n > 1 else f" — <b>{price_total:.0f} €</b>") + " (после брони)\n\n")
+           f"🤝 Наш сервис: {per:.0f} €{each or f' — <b>{price_total:.0f} €</b>'}"
+           + (f" − скидка {disc_pct}% = <b>{price_after:.2f} €</b>" if disc_pct else "") + " — после брони\n"
+           f"Итого: <b>{fee * n + price_after:.2f} €</b>\n\n" if fee else
+           f"Стоимость сервиса: {per:.0f} €" + (each if n > 1 else f" — <b>{price_total:.0f} €</b>")
+           + (f"\n🎁 Твоя скидка {disc_pct}%: <b>{price_after:.2f} €</b>" if disc_pct else "") + " (после брони)\n\n")
         + (f"🏛 В день подачи каждый оплачивает сам: {requirements(data['mission']).at_centre}."
            + (" Для детей консульский сбор меньше: 6–12 лет — 45 €, до 6 лет — бесплатно." if _has_child(people) else "")
            + "\n\n" if requirements(data["mission"]).at_centre else "")
@@ -922,6 +927,10 @@ async def _order_confirm(call: CallbackQuery, state: FSMContext, db: Database, s
     fee = await db.fee(data["mission"]) * n
     order_id = await db.create_order(call.from_user.id, data["mission"], d_from, d_to, security.encrypt(applicant),
                                      destination=data.get("destination"), fee=fee, people=n)
+    disc = await db.best_discount(call.from_user.id)
+    if disc:
+        await db.use_discount(disc["id"], order_id)
+        await db.update_order(order_id, discount_id=disc["id"], discount_pct=disc["percent"])
     await db.log_event(call.from_user.id, "order_new", f"#{order_id} {data.get('destination')}")
     await log_step(db, call.from_user.id, "submitted")
     await call.answer()
@@ -1188,8 +1197,9 @@ async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, sett
     elif action == "book":
         await state.set_state(Booking.details)
         await state.update_data(order_id=oid)
+        base = await service_total(db, settings, o["mission"], applicant_people(security.decrypt(o["applicant"])))
         price = (o["price_eur"] if o["price_eur"] is not None
-                 else await service_total(db, settings, o["mission"], applicant_people(security.decrypt(o["applicant"]))))
+                 else round(base * (100 - (o["discount_pct"] or 0)) / 100, 2))
         cancel_kb = InlineKeyboardBuilder()
         cancel_kb.button(text="✖️ Не сейчас", callback_data="oa:bookcancel:0")
         await call.message.answer(reply_markup=cancel_kb.as_markup(), text=
@@ -1244,8 +1254,9 @@ async def booking_details(message: Message, state: FSMContext, db: Database, set
         await message.answer(f"Заявка #{oid} уже в статусе «{STATUS.get(o['status'], o['status'])}», бронь не вношу.")
         return
     if price is None:
+        base = await service_total(db, settings, o["mission"], applicant_people(security.decrypt(o["applicant"])))
         price = (float(o["price_eur"]) if o["price_eur"] is not None
-                 else await service_total(db, settings, o["mission"], applicant_people(security.decrypt(o["applicant"]))))
+                 else round(base * (100 - (o["discount_pct"] or 0)) / 100, 2))
     file_id = None
     if message.document:
         # strip metadata (author, software, EXIF) and rename before the client ever sees the file
@@ -1362,6 +1373,7 @@ async def cancel_order(bot: Bot, db: Database, settings: Settings, o, by_client:
             await payments.delete_invoice(inv)
     await db.update_order(oid, status="cancelled")
     await db.cancel_direct_for_order(oid)
+    await db.release_discount(oid)
     await db.log_event(o["tg_id"], "order_cancel_client" if by_client else "order_cancel", f"#{oid}")
     refund = (f"\n💸 Сбор {o['fee_eur']:.2f} € уже был оплачен ({html.escape(o['fee_paid'] or '')}) — "
               "верни его клиенту: @CryptoBot → Отправить, или чеком.") if o["fee_paid_at"] else ""
@@ -1376,10 +1388,29 @@ async def cancel_order(bot: Bot, db: Database, settings: Settings, o, by_client:
                 await notify_client(bot, a, f"Заявка #{oid} отменена.{refund}")
 
 
+REFERRAL_PERCENT = 50
+
+
+async def reward_referrer(bot: Bot, db: Database, settings: Settings, buyer_tg: int) -> None:
+    ref = await db.referrer_of(buyer_tg)
+    if not ref:
+        return
+    await db.mark_ref_rewarded(buyer_tg)
+    await db.add_discount(ref, REFERRAL_PERCENT, "referral", source_tg=buyer_tg)
+    try:
+        await bot.send_message(ref, f"🎉 Твой друг оплатил запись! Тебе начислена скидка <b>{REFERRAL_PERCENT}%</b> "
+                                    "на следующую заявку — применится автоматически. Спасибо, что приводишь друзей!")
+    except Exception:
+        pass
+    for a in settings.admin_ids:
+        await notify_client(bot, a, f"🎁 Реферальная скидка {REFERRAL_PERCENT}% начислена {ref} за друга {buyer_tg}")
+
+
 async def mark_paid(bot: Bot, db: Database, settings: Settings, oid: int, asset: str, amount: str) -> None:
     o = await db.order(oid)
     if not o or o["status"] in ("paid", "done"):
         return
+    await reward_referrer(bot, db, settings, o["tg_id"])
     await db.update_order(oid, status="paid", paid_at=datetime.now(timezone.utc), paid_asset=asset, paid_amount=amount)
     await db.cancel_direct_for_order(oid)
     if o["invoice_id"] and payments.enabled() and "TRC20" in asset:

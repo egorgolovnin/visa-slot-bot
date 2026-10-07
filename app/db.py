@@ -161,6 +161,22 @@ CREATE TABLE IF NOT EXISTS direct_payments (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     paid_at    TIMESTAMPTZ
 );
+CREATE TABLE IF NOT EXISTS discounts (
+    id         BIGSERIAL PRIMARY KEY,
+    tg_id      BIGINT NOT NULL,
+    percent    INT NOT NULL,                 -- 5..50
+    reason     TEXT NOT NULL,                -- referral / wheel / manual
+    source_tg  BIGINT,                       -- who triggered it (referred friend)
+    used_order BIGINT,                       -- order it was applied to
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    used_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS discounts_user ON discounts (tg_id) WHERE used_at IS NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ref_rewarded BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS wheel_spun BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_id BIGINT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_pct INT NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS prices (
     mission   TEXT PRIMARY KEY,
     price_eur NUMERIC(10, 2) NOT NULL
@@ -676,3 +692,53 @@ class Database:
             """SELECT key, state, data, updated_at FROM fsm
                WHERE state LIKE 'NewOrder:%' AND updated_at < now() - make_interval(mins => $1)
                ORDER BY updated_at DESC""", min_minutes)
+
+    # ---- discounts & referrals ----
+    async def set_referrer(self, tg_id: int, referrer: int) -> bool:
+        """Link a new user to who invited them. Returns True if set (only once, not self)."""
+        if referrer == tg_id:
+            return False
+        row = await self.pool.fetchrow(
+            "UPDATE users SET referred_by = $2 WHERE tg_id = $1 AND referred_by IS NULL RETURNING tg_id", tg_id, referrer)
+        return bool(row)
+
+    async def add_discount(self, tg_id: int, percent: int, reason: str, source_tg: int | None = None) -> int:
+        return await self.pool.fetchval(
+            "INSERT INTO discounts (tg_id, percent, reason, source_tg) VALUES ($1, $2, $3, $4) RETURNING id",
+            tg_id, percent, reason, source_tg)
+
+    async def best_discount(self, tg_id: int):
+        return await self.pool.fetchrow(
+            """SELECT id, percent, reason FROM discounts WHERE tg_id = $1 AND used_at IS NULL
+               ORDER BY percent DESC, created_at LIMIT 1""", tg_id)
+
+    async def use_discount(self, discount_id: int, order_id: int) -> None:
+        await self.pool.execute(
+            "UPDATE discounts SET used_at = now(), used_order = $2 WHERE id = $1 AND used_at IS NULL",
+            discount_id, order_id)
+
+    async def release_discount(self, order_id: int) -> None:
+        await self.pool.execute(
+            "UPDATE discounts SET used_at = NULL, used_order = NULL WHERE used_order = $1", order_id)
+
+    async def referrer_of(self, tg_id: int) -> int | None:
+        return await self.pool.fetchval(
+            "SELECT referred_by FROM users WHERE tg_id = $1 AND NOT ref_rewarded", tg_id)
+
+    async def mark_ref_rewarded(self, tg_id: int) -> None:
+        await self.pool.execute("UPDATE users SET ref_rewarded = TRUE WHERE tg_id = $1", tg_id)
+
+    async def referral_stats(self, tg_id: int):
+        invited = await self.pool.fetchval("SELECT count(*) FROM users WHERE referred_by = $1", tg_id)
+        paid = await self.pool.fetchval(
+            """SELECT count(DISTINCT u.tg_id) FROM users u JOIN orders o ON o.tg_id = u.tg_id
+               WHERE u.referred_by = $1 AND o.paid_at IS NOT NULL""", tg_id)
+        discounts = await self.pool.fetch(
+            "SELECT percent, reason, used_at FROM discounts WHERE tg_id = $1 ORDER BY created_at DESC", tg_id)
+        return invited, paid, discounts
+
+    async def can_spin_wheel(self, tg_id: int) -> bool:
+        return not bool(await self.pool.fetchval("SELECT wheel_spun FROM users WHERE tg_id = $1", tg_id))
+
+    async def mark_wheel_spun(self, tg_id: int) -> None:
+        await self.pool.execute("UPDATE users SET wheel_spun = TRUE WHERE tg_id = $1", tg_id)

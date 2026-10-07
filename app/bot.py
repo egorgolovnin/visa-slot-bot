@@ -21,6 +21,8 @@ router = Router()
 USER_COMMANDS = [
     ("order", "Записаться на визу"),
     ("myorders", "Мои заявки и оплата"),
+    ("invite", "Привести друга — скидка 50%"),
+    ("wheel", "Колесо фортуны — скидка"),
     ("faq", "Частые вопросы"),
     ("terms", "Условия сервиса"),
     ("case", "Поделиться результатом визы"),
@@ -41,6 +43,7 @@ ADMIN_COMMANDS = [
     ("user", "Карточка: /user ID"),
     ("link", "Ссылка с меткой: /link community"),
     ("broadcast", "Рассылка: /broadcast текст"),
+    ("givediscount", "Выдать скидку: /givediscount ID %"),
     ("ban", "Заблокировать: /ban ID"),
     ("unban", "Разблокировать: /unban ID"),
     ("health", "Состояние проверок"),
@@ -57,7 +60,8 @@ HELP = (
     "💸 Сервис — {price} € с человека. Семья 2 взрослых + ребёнок — пакет {family} € за всех. "
     "Плюс сбор визового центра, если он есть. Ниже, чем у конкурентов: мы не вредители, "
     "а помогаторы. За сервис платишь только когда запись уже есть.\n\n"
-    "📂 Можем собрать документы на визу полностью за тебя — {docs_price} €. Напиши в /support.\n\n"
+    "📂 Можем собрать документы на визу полностью за тебя — {docs_price} €. Напиши в /support.\n"
+    "🤝 /invite — приведи друга, получи 50% на следующую заявку. 🎡 /wheel — колесо фортуны со скидкой.\n\n"
 
     "<b>Страны</b>\n"
     "Австрия, Бельгия, Венгрия, Германия, Дания, Исландия, Люксембург, Нидерланды, Норвегия, "
@@ -250,6 +254,10 @@ async def start(message: Message, command: CommandObject, db: Database, settings
     u = message.from_user
     admin = is_admin(u.id, settings)
     source = (command.args or "").strip()
+    if source.startswith("ref") and source[3:].isdigit():
+        if is_new_user and await db.set_referrer(u.id, int(source[3:])):
+            await db.log_event(u.id, "referred", source[3:])
+        source = "referral"
     if source:
         await db.set_source(u.id, re.sub(r"[^\w\-]", "", source))
     name = html.escape(u.full_name + (f" @{u.username}" if u.username else ""))
@@ -686,6 +694,7 @@ async def fallback(message: Message) -> None:
         kb.button(text="📝 Записаться на визу", callback_data="go:order")
         kb.button(text="📋 Мои заявки", callback_data="go:myorders")
         kb.button(text="📂 Собрать документы за меня", callback_data="docs:req")
+        kb.button(text="🎁 Скидки и друзья", callback_data="go:promo")
         kb.button(text="❓ Частые вопросы", callback_data="go:faq")
         kb.button(text="✉️ Поддержка", callback_data="go:support")
         kb.adjust(1)
@@ -701,6 +710,14 @@ async def go(call: CallbackQuery, db: Database, poller: Poller, settings: Settin
         await order_start(call.message, state, db, settings, uid=call.from_user.id)
     elif target == "faq":
         await call.message.answer(FAQ.replace("{price}", price_str(settings)).replace("{family}", f"{settings.family_price:.0f}"))
+    elif target == "promo":
+        from .promo import referral_link
+        link = await referral_link(call.bot, call.from_user.id)
+        invited, paid, _ = await db.referral_stats(call.from_user.id)
+        await call.message.answer(
+            f"🤝 <b>Приведи друга</b> — когда он оплатит запись, тебе −50% на следующую заявку.\n\n"
+            f"Твоя ссылка:\n{link}\n\nПриглашено: {invited}, оплатили: {paid}\n\n"
+            "🎡 Ещё есть колесо фортуны со скидкой: /wheel", disable_web_page_preview=True)
     elif target == "support":
         from .support import ask_question
         await ask_question(call.message, state)
