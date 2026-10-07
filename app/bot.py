@@ -353,8 +353,9 @@ def admin_keyboard():
     from aiogram.types import WebAppInfo
     from .web import public_url
     kb = InlineKeyboardBuilder()
-    if public_url():
-        kb.button(text="📊 Открыть кабинет", web_app=WebAppInfo(url=f"{public_url()}/panel"))
+    u = public_url()
+    if u and u.startswith("https://"):
+        kb.button(text="📊 Открыть кабинет", web_app=WebAppInfo(url=f"{u}/panel"))
     kb.button(text="🔄 Обновить", callback_data="adm:dash")
     kb.button(text="👥 Пользователи", callback_data="adm:users:0")
     kb.button(text="🩺 Проверки", callback_data="adm:health")

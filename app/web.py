@@ -27,7 +27,12 @@ CASES_PAGE = Path(__file__).with_name("cases.html")
 
 def public_url() -> str | None:
     domain = os.getenv("PUBLIC_DOMAIN") or os.getenv("RAILWAY_PUBLIC_DOMAIN")
-    return f"https://{domain}" if domain else None
+    if not domain:
+        return None
+    if domain.startswith("http://") or domain.startswith("https://"):
+        return domain.rstrip("/")
+    scheme = "http" if (":" in domain or domain.replace(".", "").isdigit()) else "https"
+    return f"{scheme}://{domain}"
 
 
 def panel_key() -> str | None:
