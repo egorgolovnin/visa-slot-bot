@@ -354,7 +354,8 @@ async def order_start(message: Message, state: FSMContext, db: Database, setting
         return
     offered = {c for c, _ in await db.offered_missions()}
     from .documents import PROCESS
-    await message.answer(PROCESS.format(price=f"{settings.default_price:.0f}", docs_price=f"{settings.docs_price:.0f}"))
+    await message.answer(PROCESS.format(price=f"{settings.default_price:.0f}", docs_price=f"{settings.docs_price:.0f}",
+                                        family=f"{settings.family_price:.0f}"))
     import os
     abroad = os.getenv("ABROAD_ORDERS", "false").lower() in ("1", "true", "yes")  # MVP: Cyprus only
     regions = sorted({region_of(k) for k, (_, m, _) in DESTINATIONS.items() if m in offered}

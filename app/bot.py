@@ -54,7 +54,8 @@ HELP = (
     "2. Если визовый центр берёт сбор за запись — оплачиваешь его сразу (это не наши деньги, мы платим его за тебя)\n"
     "3. Мы ловим свободный слот и записываем тебя\n"
     "4. Присылаем подтверждение — ты оплачиваешь наш сервис в крипте\n\n"
-    "💸 Сервис — {price} € + сбор визового центра, если он есть. Ниже, чем у конкурентов: мы не вредители, "
+    "💸 Сервис — {price} € с человека. Семья 2 взрослых + ребёнок — пакет {family} € за всех. "
+    "Плюс сбор визового центра, если он есть. Ниже, чем у конкурентов: мы не вредители, "
     "а помогаторы. За сервис платишь только когда запись уже есть.\n\n"
     "📂 Можем собрать документы на визу полностью за тебя — {docs_price} €. Напиши в /support.\n\n"
 
@@ -93,10 +94,8 @@ def price_str(settings: Settings) -> str:
 
 
 def help_text(settings: Settings, admin: bool = False) -> str:
-    from .web import public_url
-    cases_url = f"{public_url()}/cases" if public_url() else "скоро"
     return (HELP.replace("{price}", price_str(settings)).replace("{docs_price}", f"{settings.docs_price:.0f}")
-            .replace("{cases_url}", cases_url) + (ADMIN_HELP if admin else ""))
+            .replace("{family}", f"{settings.family_price:.0f}") + (ADMIN_HELP if admin else ""))
 
 
 FAQ = (
@@ -112,6 +111,8 @@ FAQ = (
     "записать невозможно. Напиши даты как есть, например «ближайшие 2 недели».\n\n"
     "<b>Насколько забирают паспорт?</b>\nОбычно на 2–3 недели после подачи. Планируй поездку с запасом. "
     "\n\n"
+    "<b>Сколько стоит?</b>\nСервис — {price} € с человека. Семья из 3 (2 взрослых + ребёнок) — пакет {family} € за всех. "
+    "Это только наш сервис; консульский и визовый сборы оплачиваешь сам в центре.\n\n"
     "<b>Как оплата?</b>\nЗа сервис — только после того, как запись сделана и ты получил подтверждение. "
     "Для Венгрии сбор визового центра оплачивается заранее: мы платим его при брони.\n\n"
     "<b>Какие документы собрать?</b>\nОфициальные списки пришлём после выбора страны в /order. "
@@ -147,15 +148,16 @@ async def terms(message: Message) -> None:
 
 
 @router.message(Command("faq"))
-async def faq(message: Message) -> None:
+async def faq(message: Message, settings: Settings) -> None:
     kb = InlineKeyboardBuilder()
     kb.button(text="📝 Записаться на визу", callback_data="go:order")
-    await message.answer(FAQ, reply_markup=kb.as_markup())
+    await message.answer(FAQ.replace("{price}", price_str(settings)).replace("{family}", f"{settings.family_price:.0f}"),
+                         reply_markup=kb.as_markup())
 
 
 async def setup_commands(bot, settings: Settings) -> None:
     try:
-        await bot.set_my_description(DESCRIPTION.replace("{price}", price_str(settings)))
+        await bot.set_my_description(DESCRIPTION.replace("{price}", price_str(settings)).replace("{family}", f"{settings.family_price:.0f}"))
         await bot.set_my_short_description(SHORT_DESCRIPTION.replace("{price}", price_str(settings)))
     except Exception:
         pass  # rate-limited by Telegram if called too often; not critical
@@ -698,7 +700,7 @@ async def go(call: CallbackQuery, db: Database, poller: Poller, settings: Settin
         from .orders import order_start
         await order_start(call.message, state, db, settings, uid=call.from_user.id)
     elif target == "faq":
-        await call.message.answer(FAQ)
+        await call.message.answer(FAQ.replace("{price}", price_str(settings)).replace("{family}", f"{settings.family_price:.0f}"))
     elif target == "support":
         from .support import ask_question
         await ask_question(call.message, state)
