@@ -149,6 +149,14 @@ def is_admin(uid: int, settings: Settings) -> bool:
     return uid in settings.admin_ids
 
 
+async def service_total(db: Database, settings: Settings, mission: str, n: int) -> float:
+    """Total service price for the order: per-person x n, or a family flat rate for n people."""
+    per = await db.price(mission, settings.default_price)
+    if n in settings.family_prices:
+        return settings.family_prices[n]
+    return per * n
+
+
 def step_kb(step: str):
     kb = InlineKeyboardBuilder()
     if step == "gender":
@@ -757,7 +765,8 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
     data = await state.get_data()
     people = data.get("people") or []
     n = max(1, len(people))
-    price = await db.price(data["mission"], settings.default_price)
+    per = await db.price(data["mission"], settings.default_price)
+    price_total = await service_total(db, settings, data["mission"], n)
     fee = await db.fee(data["mission"])
     if data.get("date_from"):
         d1 = date.fromisoformat(data["date_from"])
@@ -769,7 +778,9 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
     d_from = date.fromisoformat(data["date_from"]) if data.get("date_from") else None
     d_to = date.fromisoformat(data["date_to"]) if data.get("date_to") else None
     warnings = check_people(people, d_from, d_to)
-    each = f" × {n} = <b>{price * n:.0f} €</b>" if n > 1 else ""
+    family = n in settings.family_prices
+    each = (f" — пакет на {n} чел.: <b>{price_total:.0f} €</b>" if family
+            else f" × {n} = <b>{price_total:.0f} €</b>") if n > 1 else ""
     fee_each = f" × {n} = <b>{fee * n:.2f} €</b>" if n > 1 else ""
     text = (
         "<b>Проверь заявку</b>\n"
@@ -781,9 +792,9 @@ async def show_confirm(message: Message, state: FSMContext, db: Database, settin
         + (f"Связь: Telegram {html.escape(data['tg_contact'])} — пишем сюда, в этот чат\n\n" if data.get("tg_contact")
            else "Связь: пишем сюда, в этот чат\n\n")
         + (f"💳 Сбор визового центра: {fee:.2f} €{fee_each or f' — <b>{fee:.2f} €</b>'} — сразу после заявки, без него слот не забронировать\n"
-           f"🤝 Наш сервис: {price:.0f} €{each or f' — <b>{price:.0f} €</b>'} — после брони\n"
-           f"Итого: <b>{(fee + price) * n:.2f} €</b>\n\n" if fee else
-           f"Стоимость сервиса: {price:.0f} €" + (each if n > 1 else "") + " (после брони)\n\n")
+           f"🤝 Наш сервис: {per:.0f} €{each or f' — <b>{price_total:.0f} €</b>'} — после брони\n"
+           f"Итого: <b>{fee * n + price_total:.2f} €</b>\n\n" if fee else
+           f"Стоимость сервиса: {per:.0f} €" + (each if n > 1 else f" — <b>{price_total:.0f} €</b>") + " (после брони)\n\n")
         + (f"🏛 В день подачи каждый оплачивает сам: {requirements(data['mission']).at_centre}."
            + (" Для детей консульский сбор меньше: 6–12 лет — 45 €, до 6 лет — бесплатно." if _has_child(people) else "")
            + "\n\n" if requirements(data["mission"]).at_centre else "")
@@ -1159,7 +1170,7 @@ async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, sett
         await state.set_state(Booking.details)
         await state.update_data(order_id=oid)
         price = (o["price_eur"] if o["price_eur"] is not None
-                 else await db.price(o["mission"], settings.default_price) * (o["people"] or 1))
+                 else await service_total(db, settings, o["mission"], o["people"] or 1))
         cancel_kb = InlineKeyboardBuilder()
         cancel_kb.button(text="✖️ Не сейчас", callback_data="oa:bookcancel:0")
         await call.message.answer(reply_markup=cancel_kb.as_markup(), text=
@@ -1215,7 +1226,7 @@ async def booking_details(message: Message, state: FSMContext, db: Database, set
         return
     if price is None:
         price = (float(o["price_eur"]) if o["price_eur"] is not None
-                 else await db.price(o["mission"], settings.default_price) * (o["people"] or 1))
+                 else await service_total(db, settings, o["mission"], o["people"] or 1))
     file_id = None
     if message.document:
         # strip metadata (author, software, EXIF) and rename before the client ever sees the file
@@ -1710,6 +1721,9 @@ async def price_cmd(message: Message, command: CommandObject, db: Database, sett
         lines.append(f"<code>{r['code']}</code> {html.escape(r['name'])}: сервис "
                      + (f"{r['price_eur']:.0f} €" if r["price_eur"] is not None else f"{settings.default_price:.0f} €")
                      + (f" + сбор {fee:.2f} € при брони" if fee else " · сбора при брони нет"))
+    if settings.family_prices:
+        fam = ", ".join(f"{k} чел. — {v:.0f} €" for k, v in sorted(settings.family_prices.items()))
+        lines.append(f"\nСемейные пакеты (за всю заявку): {fam}")
     lines.append("\nИзменить: /price hun 120 · сбор: /fee svk 29 · проверить оплату: /testinvoice")
     payment_state = "подключена" if payments.enabled() else "не подключена (нужен CRYPTO_PAY_TOKEN)"
     lines.append(f"Оплата Crypto Pay: {payment_state}")

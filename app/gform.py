@@ -70,10 +70,12 @@ def validate(a: dict) -> tuple[dict, list[str]]:
     if kind == "error":
         errors.append("даты не распознаны")
     d["date_from"], d["date_to"] = (d1.isoformat() if d1 else None), (d2.isoformat() if d2 else None)
+    # the Google Form collects full data for one person only; capture the stated count as a hint for the admin
     try:
-        d["n"] = max(1, min(5, int(re.search(r"\d+", a.get("count") or "1").group(0))))
+        d["stated_count"] = max(1, min(5, int(re.search(r"\d+", a.get("count") or "1").group(0))))
     except Exception:
-        d["n"] = 1
+        d["stated_count"] = 1
+    d["n"] = 1
     p = {}
     name = re.sub(r"\s+", " ", re.sub(r"[-'’]", " ", (a.get("full_name") or "").upper())).strip()
     if not re.fullmatch(r"[A-Z]+( [A-Z]+)+", name):
@@ -128,18 +130,20 @@ async def handle_submission(bot: Bot, db, settings, payload: dict) -> dict:
                                + "\n\nИсправь и отправь форму ещё раз — или заполни заявку прямо в боте: /order")
         await db.log_event(uid, "form_error", "; ".join(errors)[:200])
         return {"ok": True, "errors": errors}
-    n = data["n"]
     applicant = {"people": data["people"], "phone": data["phone"], "tg_contact": None, "same_day": None,
                  "form_extra": data["form_extra"], "form_comment": data["form_comment"], "source": "google_form"}
-    fee = await db.fee(data["mission"]) * n
+    fee = await db.fee(data["mission"])  # one person
     oid = await db.create_order(uid, data["mission"], date.fromisoformat(data["date_from"]) if data["date_from"] else None,
                                 date.fromisoformat(data["date_to"]) if data["date_to"] else None, security.encrypt(applicant),
-                                destination=data["destination"], fee=fee, people=n)
+                                destination=data["destination"], fee=fee, people=1)
     await db.log_event(uid, "order_new", f"#{oid} {data['destination']} form")
     await db.log_event(uid, "fstep", "submitted")
     warns = check_people(data["people"], date.fromisoformat(data["date_from"]) if data["date_from"] else None,
                          date.fromisoformat(data["date_to"]) if data["date_to"] else None)
-    text = (f"✅ Заявка из Google Формы получена: <b>#{oid}</b>, {html.escape(data['mission_name'])}."
+    more = data.get("stated_count", 1) > 1
+    text = (f"✅ Заявка из Google Формы получена: <b>#{oid}</b>, {html.escape(data['mission_name'])} (на 1 человека)."
+            + ("\n\n👨‍👩‍👧 Ты указал, что едете несколько человек. На каждого нужна отдельная запись — "
+               "оформи остальных через /order в боте (там можно сразу семьёй и со скидкой)." if more else "")
             + (f"\n\n⚠️ Обрати внимание:\n" + "\n".join(f"• {html.escape(w)}" for w in warns) if warns else "")
             + "\n\nСтатус — /myorders. Вопросы — /support")
     await bot.send_message(uid, text)
@@ -150,7 +154,8 @@ async def handle_submission(bot: Bot, db, settings, payload: dict) -> dict:
         await db.kv_set(f"await_scan:{uid}", str(oid))
     if fee > 0:
         await orders.issue_fee_invoice(bot, db, settings, oid)
-    header = ("📝 Новая заявка из Google Формы" + (f" на {n} чел." if n > 1 else "")
+    header = ("📝 Новая заявка из Google Формы (1 чел.)"
+              + (f" · клиент указал {data['stated_count']} чел. — предложил оформить остальных в боте" if more else "")
               + (f" — ждём оплату сбора {fee:.2f} €" if fee else ""))
     dups = await duplicate_passports(db, data["people"], uid, exclude_order=oid)
     if dups:
