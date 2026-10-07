@@ -281,6 +281,16 @@ class Poller:
         except Exception as e:
             log.warning("visarea import failed: %s", e)
 
+    async def disable_abroad(self) -> None:
+        """MVP: stop monitoring and hide every VFS centre abroad (codes with a dash)."""
+        n = await self.db.pool.fetchval(
+            "UPDATE missions SET offered = FALSE WHERE code LIKE '%-%' AND offered RETURNING 1") if False else None
+        res = await self.db.pool.execute("UPDATE missions SET offered = FALSE WHERE code LIKE '%-%' AND offered")
+        count = int(res.split()[-1]) if res else 0
+        if count:
+            log.info("disabled %d abroad missions (MVP: Cyprus only)", count)
+            await self.alert_admins(f"🧹 Отключил {count} зарубежных центров — мониторим только Кипр и посольства.")
+
     async def discover_abroad(self) -> None:
         if await self.db.kv_get("abroad_discovery") == "v2":
             return
@@ -339,6 +349,11 @@ class Poller:
     async def run(self) -> None:
         log.info("poller started, proxy=%s", bool(self.s.proxy_url))
         await self.register_static()
+        if not ABROAD_ON:
+            try:
+                await self.disable_abroad()
+            except Exception:
+                log.exception("disable_abroad")
         try:
             await self.probe_vfs_fields()
         except Exception:
@@ -348,7 +363,8 @@ class Poller:
         except Exception:
             log.exception("vfs login probe")
         await self.import_open_cases()
-        asyncio.create_task(self.discover_abroad())
+        if ABROAD_ON:
+            asyncio.create_task(self.discover_abroad())
         last_discover = await self.db.last_discovery()
         if last_discover is None:
             await self.alert_admins("🔎 Первая разведка завершена.\n" + await self.discover())

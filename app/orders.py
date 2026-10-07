@@ -1577,16 +1577,16 @@ async def order_resume(call: CallbackQuery, state: FSMContext, db: Database, set
 
 
 async def weekly_slots_report(bot: Bot, db: Database, settings: Settings) -> None:
-    """Every Monday from 10:00 (Cyprus time) admins get last week's slot statistics, once."""
+    """Daily at 09:00 Cyprus time: yesterday's slot statistics to admins, once per day."""
     now = datetime.now(ZoneInfo(settings.tz))
-    if now.weekday() != 0 or now.hour < 10:
+    if now.hour < 9:
         return
-    week = now.strftime("%G-W%V")
-    if await db.kv_get("weekly_slots_report") == week:
+    day = now.strftime("%Y-%m-%d")
+    if await db.kv_get("daily_slots_report") == day:
         return
-    await db.kv_set("weekly_slots_report", week)
+    await db.kv_set("daily_slots_report", day)
     from .slotstats import report
-    text = report(await db.observations(7), 7, settings.tz, await db.first_observation())
+    text = "☀️ <b>Сводка за сутки</b>\n\n" + report(await db.observations(1), 1, settings.tz, await db.first_observation())
     for a in settings.admin_ids:
         for chunk in [text[i:i + 3800] for i in range(0, len(text), 3800)]:
             await notify_client(bot, a, chunk)
