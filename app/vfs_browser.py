@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 log = logging.getLogger("vfs_browser")
@@ -65,14 +66,21 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                     pass
         page.on("response", on_response)
 
+        log.info("vfs_browser: goto login")
         await page.goto(LOGIN_URL.format(country=country, mission=mission), wait_until="domcontentloaded", timeout=timeout * 1000)
         await _pass_turnstile(page)
+        await asyncio.sleep(3)
+        log.info("vfs_browser: page title=%r url=%s", await page.title(), page.url)
         # fill the form
         try:
+            await page.wait_for_selector("input[type=email], input[formcontrolname=email], #email", timeout=20000)
             await page.fill("input[type=email], input[formcontrolname=email], #email", email, timeout=15000)
             await page.fill("input[type=password], input[formcontrolname=password], #password", password, timeout=15000)
+            log.info("vfs_browser: filled form, solving turnstile before submit")
             await _pass_turnstile(page)
+            await asyncio.sleep(1)
             await page.click("button[type=submit], button:has-text('Sign In'), button:has-text('Login')", timeout=15000)
+            log.info("vfs_browser: submitted")
         except Exception as e:
             log.warning("form fill failed: %s", e)
         # wait for the token to arrive
@@ -86,8 +94,15 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
             await page.context.storage_state(path=str(state_file))
             log.info("VFS browser login ok %s-%s", country, mission)
             return {"token": token, "cookies": cookies, "user_agent": ua}
-        html = (await page.content())[:600]
-        log.warning("VFS browser login: no token. page: %s", html.replace("\n", " "))
+        try:
+            body = await page.content()
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            (STATE_DIR / "last_login.html").write_text(body[:200000], encoding="utf-8")
+            await page.screenshot(path=str(STATE_DIR / "last_login.png"))
+        except Exception:
+            body = ""
+        snippet = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body))[:400]
+        log.warning("VFS browser login: no token. visible text: %s", snippet)
         return None
 
 
