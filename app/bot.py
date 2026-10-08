@@ -715,10 +715,20 @@ async def vfslogin(message: Message, command: CommandObject, poller: Poller, set
                 await sess.login(accs[0][0], accs[0][1], otp=code)
         if sess.alive:
             await message.answer(f"✅ Вход прошёл! cf_clearance: {'есть' if c else 'нет'}. Автобронь возможна.")
-        else:
-            await message.answer(f"⚠️ Токен не получен. cf_clearance: {'есть' if c else 'нет'}.")
+            return
     except Exception as e:
-        await message.answer(f"⚠️ Вход не прошёл: <code>{html.escape(str(e))[:400]}</code>")
+        await message.answer(f"curl_cffi: <code>{html.escape(str(e))[:200]}</code>")
+    # fallback: full browser login via FlareSolverr
+    try:
+        from urllib.parse import urlencode
+        from datetime import datetime, timezone
+        body = urlencode({"username": accs[0][0], "password": vfs_auth.rsa_encrypt(accs[0][1].encode()),
+                          "missioncode": mission, "countrycode": "cyp", "languageCode": "en-US"})
+        st_, resp, ua = await cf.browser_post("https://lift-api.vfsglobal.com/user/login", body, proxy=proxy)
+        tag = "ok (есть токен)" if "accessToken" in resp else ("403102" if "403102" in resp else f"{st_}")
+        await message.answer(f"Браузерный логин (FlareSolverr): {tag}\n<code>{html.escape(resp[:300])}</code>")
+    except Exception as e:
+        await message.answer(f"Браузерный логин: <code>{html.escape(str(e))[:200]}</code>")
 
 
 @router.message(Command("slotprobe"))
