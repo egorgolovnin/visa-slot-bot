@@ -26,6 +26,7 @@ MAX_BACKOFF = 6               # max multiplier of the VFS poll interval after 42
 RK_COOLDOWN = 1800            # seconds to leave RK-Termin alone after a failed check
 REALERT_AFTER = 1800          # same slot flapping open/closed: alert again only after this
 DISCOVER_RETRIES = 3          # VFS answers transient 1019/1020 errors; retry before "not offered"
+CYPRUS_CORE = {"aut", "svk", "fin", "hrv"}   # VFS centres we sell in Cyprus — always kept monitored
 REDISCOVER_EVERY = timedelta(days=7)
 
 # missions served by non-VFS systems: code -> display name
@@ -91,6 +92,11 @@ class Poller:
     async def register_static(self) -> None:
         for code, name in RK_MISSIONS.items():
             await self.db.set_mission(code, name, True)
+        # keep the core Cyprus VFS missions monitored even if a past discovery dropped one
+        core_names = {"aut": "Австрия", "svk": "Словакия", "fin": "Финляндия", "hrv": "Хорватия"}
+        for code in CYPRUS_CORE:
+            if not await self.db.pool.fetchval("SELECT offered FROM missions WHERE code=$1", code):
+                await self.db.set_mission(code, core_names[code], True)
         for code, name in SS_MISSIONS.items():
             await self.db.set_mission(code, name, supersaas.enabled())
 
@@ -107,14 +113,15 @@ class Poller:
             for code, name in SCHENGEN.items():
                 if code in NON_VFS:
                     continue
-                offered = None
+                offered = False
+                misses = 0
                 for attempt in range(DISCOVER_RETRIES):
                     try:
                         await self.client.fetch(code)
                         offered = True
                         break
                     except NotOffered as e:
-                        offered = False
+                        misses += 1
                         log.info("discover %s try %d: not offered (%s)", code, attempt + 1, str(e)[:80])
                         await asyncio.sleep(random.uniform(2, 4))
                     except Blocked as e:
@@ -123,6 +130,10 @@ class Poller:
                 if blocked:
                     log.warning("discover %s: BLOCKED %s", code, blocked[:200])
                     break
+                # never drop a core Cyprus mission on a transient miss — keep it monitored
+                if code in CYPRUS_CORE and not offered:
+                    log.info("discover %s: kept (core Cyprus mission, transient miss)", code)
+                    offered = True
                 await self.db.set_mission(code, name, offered)
                 if offered:
                     found.append(name)
