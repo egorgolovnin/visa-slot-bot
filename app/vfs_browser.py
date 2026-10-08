@@ -116,26 +116,18 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                 await asyncio.sleep(3)
             if not filled:
                 raise RuntimeError("email/password inputs not found")
-            # re-enter by real typing so Angular Material marks the controls valid
-            try:
-                await page.evaluate("""() => {
-                    const vis = el => el.offsetParent !== null && !el.disabled;
-                    const ins = [...document.querySelectorAll('input')].filter(vis);
-                    const pass = ins.find(e => e.type === 'password');
-                    const mail = ins.find(e => e !== pass);
-                    if (mail) { mail.value=''; mail.setAttribute('data-mail','1'); }
-                    if (pass) { pass.value=''; pass.setAttribute('data-pass','1'); }
+            # WAIT for Turnstile to actually solve — the Sign In button stays disabled until then
+            solved = await _pass_turnstile(page, timeout=70)
+            log.info("vfs_browser: turnstile solved=%s", solved)
+            # wait for the button to become enabled (Angular enables it once form+turnstile are valid)
+            for _ in range(15):
+                st = await page.evaluate("""() => {
+                    const b = [...document.querySelectorAll('button')].find(x => /sign ?in/i.test(x.textContent));
+                    return b ? b.disabled : null;
                 }""")
-                await page.click("input[data-mail]", timeout=5000)
-                await page.type("input[data-mail]", email, delay=40)
-                await page.click("input[data-pass]", timeout=5000)
-                await page.type("input[data-pass]", password, delay=40)
-                await page.keyboard.press("Tab")
-                log.info("vfs_browser: typed credentials")
-            except Exception as e:
-                log.info("vfs_browser: typing fallback failed: %s", e)
-            await _pass_turnstile(page)
-            await asyncio.sleep(1)
+                if st is False:
+                    break
+                await asyncio.sleep(1)
             btnstate = await page.evaluate("""() => {
                 const b = [...document.querySelectorAll('button')].find(x =>
                     /sign ?in|log ?in|login|submit/i.test(x.textContent));
@@ -211,14 +203,22 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
         return None
 
 
-async def _pass_turnstile(page) -> None:
-    """Give Camoufox's engine time to clear a Turnstile challenge if one is shown."""
-    for _ in range(20):
+async def _pass_turnstile(page, timeout: int = 60) -> bool:
+    """Wait until Cloudflare Turnstile is solved (its hidden response token gets a value). Returns True if solved."""
+    for _ in range(timeout):
         try:
-            if await page.query_selector("iframe[src*='challenges.cloudflare.com']") or \
-               await page.query_selector(".cf-turnstile"):
-                await asyncio.sleep(2)
-                continue
+            tok = await page.evaluate("""() => {
+                const t = document.querySelector('[name="cf-turnstile-response"], input[name*="turnstile"]');
+                return t ? (t.value || '') : '__notok__';
+            }""")
+            if tok and tok != "__notok__":
+                return True          # token present -> solved
+            if tok == "__notok__":
+                # no turnstile widget on the page at all
+                has = await page.query_selector("iframe[src*='challenges.cloudflare.com'], .cf-turnstile")
+                if not has:
+                    return True
         except Exception:
             pass
-        break
+        await asyncio.sleep(1)
+    return False
