@@ -81,65 +81,52 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                "input[name=password], input[autocomplete=current-password]")
         btn = ("button[type=submit], button:has-text('Sign In'), button:has-text('Sign in'), "
                "button:has-text('Login'), button:has-text('Log in'), button:has-text('Submit')")
+        filled = False
         try:
-            await asyncio.sleep(6)
-            target = None  # the page or frame that actually holds the email field
-            for attempt in range(5):
-                for fr in [page] + page.frames:
-                    try:
-                        el = await fr.query_selector(EMAIL)
-                        if el:
-                            target = fr
-                            break
-                    except Exception:
-                        continue
-                if target:
-                    break
-                # log what each frame has, to diagnose
-                for fr in page.frames:
-                    try:
-                        n = len(await fr.query_selector_all("input"))
-                        if n:
-                            log.info("vfs_browser: frame %s has %d inputs", (fr.url or "")[:60], n)
-                    except Exception:
-                        pass
+            for attempt in range(6):
                 await _pass_turnstile(page)
-                await asyncio.sleep(3)
-            if not target:
-                # dump every input's attributes from whichever frame has them
-                for fr in [page] + page.frames:
-                    try:
-                        els = await fr.query_selector_all("input")
-                    except Exception:
-                        continue
-                    if not els:
-                        continue
-                    for i, el in enumerate(els[:15]):
-                        try:
-                            a = await el.evaluate("e => e.id+'|'+e.name+'|'+e.type+'|'+(e.getAttribute('formcontrolname')||'')+'|'+e.placeholder+'|'+(e.getAttribute('aria-label')||'')")
-                            log.info("vfs_browser INPUT[%d] %s", i, a)
-                        except Exception:
-                            pass
+                res = await page.evaluate(
+                    """([em, pw]) => {
+                        const vis = el => el.offsetParent !== null && !el.disabled && !el.readOnly;
+                        const ins = [...document.querySelectorAll('input')].filter(vis);
+                        const pass = ins.find(e => e.type === 'password');
+                        const mail = ins.find(e => e.type === 'email')
+                            || ins.find(e => /mail|user|login/i.test(e.name + e.id + (e.getAttribute('formcontrolname')||'') + (e.placeholder||'') + (e.getAttribute('autocomplete')||'')))
+                            || ins.find(e => e !== pass && (e.type === 'text' || !e.type));
+                        const set = (el, v) => { if(!el) return false;
+                            const d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+                            d.call(el, v);
+                            el.dispatchEvent(new Event('input',{bubbles:true}));
+                            el.dispatchEvent(new Event('change',{bubbles:true}));
+                            el.dispatchEvent(new Event('blur',{bubbles:true}));
+                            return true; };
+                        return {inputs: ins.length, mail: set(mail, em), pass: set(pass, pw),
+                                mailInfo: mail ? (mail.type+'/'+(mail.getAttribute('formcontrolname')||mail.name||mail.id||mail.placeholder)) : null};
+                    }""", [email, password])
+                log.info("vfs_browser fill try %d: %s", attempt, res)
+                if res.get("mail") and res.get("pass"):
+                    filled = True
                     break
-                raise RuntimeError("email field not found by selector; see INPUT dump")
-            await target.fill(EMAIL, email, timeout=15000)
-            await target.fill(PWD, password, timeout=15000)
-            log.info("vfs_browser: filled form in frame %s", (target.url or "main")[:60])
+                await asyncio.sleep(3)
+            if not filled:
+                raise RuntimeError("email/password inputs not found")
             await _pass_turnstile(page)
             await asyncio.sleep(1)
-            try:
-                await target.click(btn, timeout=10000)
-            except Exception:
-                await page.click(btn, timeout=10000)
+            # click the submit button (enable it first if Angular left it disabled)
+            await page.evaluate("""() => {
+                const b = [...document.querySelectorAll('button')].find(x =>
+                    /sign ?in|log ?in|login|submit|continue/i.test(x.textContent));
+                if (b) { b.disabled = false; b.click(); }
+            }""")
             log.info("vfs_browser: submitted")
         except Exception as e:
-            frames_info = []
-            for fr in page.frames:
-                try:
-                    frames_info.append(f"{(fr.url or '')[:40]}:{len(await fr.query_selector_all('input'))}")
-                except Exception:
-                    pass
-            log.warning("form fill failed: %s | frames=%s", e, frames_info)
+            try:
+                (STATE_DIR / "last_login.html").write_text((await page.content())[:200000], encoding="utf-8")
+                await page.screenshot(path=str(STATE_DIR / "last_login.png"))
+            except Exception:
+                pass
+            log.warning("form fill failed: %s", e)
+
         # wait for the token to arrive
         for _ in range(timeout):
             if token:
