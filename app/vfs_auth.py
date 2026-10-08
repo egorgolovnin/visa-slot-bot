@@ -64,7 +64,7 @@ class VfsSession:
         self.token: str | None = None
         self.obtained = 0.0
         self.cookies: dict = {}
-        self.impersonate = "chrome124"
+        self.impersonate = "chrome124"  # a widely-supported default; login picks the best available
 
     @property
     def alive(self) -> bool:
@@ -85,13 +85,10 @@ class VfsSession:
         ua = (clearance or {}).get("user_agent") or UA
         if clearance:
             self.cookies.update(clearance["cookies"])
-        # match curl_cffi's TLS/JA3 to the Chrome version FlareSolverr used, else cf_clearance is rejected
+        # cf_clearance is bound to the browser fingerprint; use curl_cffi profiles it actually supports.
+        # The real Chrome major (from FlareSolverr's UA, e.g. 152) only drives the sec-ch-ua header.
         major = self._chrome_major(ua)
-        for prof in (f"chrome{major}", "chrome124", "chrome120", "chrome"):
-            self.impersonate = prof
-            break
-        m = re.search(r"Chrome/(\d+)", ua or "")
-        ch_ua = (f'"Chromium";v="{major}", "Google Chrome";v="{major}", "Not.A/Brand";v="99"')
+        ch_ua = f'"Chromium";v="{major}", "Google Chrome";v="{major}", "Not.A/Brand";v="99"'
         base = {"accept-language": "en-US,en;q=0.9", "origin": "https://visa.vfsglobal.com",
                 "referer": f"https://visa.vfsglobal.com/{self.country}/en/{self.mission}/login",
                 "route": f"{self.country}/en/{self.mission}", "user-agent": ua,
@@ -116,7 +113,20 @@ class VfsSession:
                 payload["otp"] = otp
             headers = {**base, "accept": "application/json, text/plain, */*", "clientsource": clientsource(),
                        "cfmlift": "mobile", "content-type": "application/json"}
-            r = await s.post(f"{LIFT}/user/login", headers=headers, json=payload)
+            r = None
+            last_err = None
+            for prof in ("chrome131", "chrome124", "chrome120", "chrome116", "chrome110", "chrome"):
+                try:
+                    r = await s.post(f"{LIFT}/user/login", headers=headers, json=payload, impersonate=prof)
+                    self.impersonate = prof
+                    break
+                except Exception as e:
+                    if "not supported" in str(e).lower():
+                        last_err = e
+                        continue
+                    raise
+            if r is None:
+                raise LoginError(f"no usable TLS profile: {last_err}")
             log.info("VFS login status=%s len=%s ua_major=%s prof=%s", r.status_code, len(r.text or ""), major, self.impersonate)
             text = r.text or ""
             if r.status_code == 403 and ("Just a moment" in text[:300] or "<!DOCTYPE" in text[:50]):
