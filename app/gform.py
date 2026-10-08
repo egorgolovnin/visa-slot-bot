@@ -164,6 +164,6 @@ async def handle_submission(bot: Bot, db, settings, payload: dict) -> dict:
         header += f"\n👥 Остальные (как написал клиент): {html.escape(data['form_extra'][:500])}"
     if data["form_comment"]:
         header += f"\n💬 {html.escape(data['form_comment'])}"
-    for a_id in settings.admin_ids:
+    for a_id in settings.admin_targets:
         await orders.send_admin_card(bot, db, a_id, oid, settings, header=header)
     return {"ok": True, "order": oid}

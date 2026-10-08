@@ -89,7 +89,7 @@ async def support_message(message: Message, state: FSMContext, db: Database, set
     kb = InlineKeyboardBuilder()
     kb.button(text="💬 Ответить", callback_data=f"sup:reply:{u.id}")
     delivered = False
-    for admin_id in settings.admin_ids:
+    for admin_id in settings.admin_targets:
         try:
             h = await message.bot.send_message(admin_id, head, reply_markup=kb.as_markup())
             c = await message.bot.copy_message(admin_id, message.chat.id, message.message_id,

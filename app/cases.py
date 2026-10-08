@@ -232,7 +232,7 @@ async def case_finish(call: CallbackQuery, state: FSMContext, db: Database, sett
     await db.log_event(call.from_user.id, "case", f"{data['country']} {data['outcome']}")
     await call.answer()
     await call.message.answer("Спасибо! Кейс поможет другим понять шансы и сроки 🙌")
-    for a in settings.admin_ids:
+    for a in settings.admin_targets:
         try:
             await call.bot.send_message(a, admin_case_text(await db.case(case_id)), reply_markup=_kb(
                 [("✅ Опубликовать", f"casea:pub:{case_id}"), ("🙈 Скрыть", f"casea:hide:{case_id}")]))

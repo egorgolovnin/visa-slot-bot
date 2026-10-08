@@ -43,6 +43,7 @@ ADMIN_COMMANDS = [
     ("user", "Карточка: /user ID"),
     ("link", "Ссылка с меткой: /link community"),
     ("broadcast", "Рассылка: /broadcast текст"),
+    ("post", "Пост в канал: /post текст (или reply)"),
     ("givediscount", "Выдать скидку: /givediscount ID %"),
     ("ban", "Заблокировать: /ban ID"),
     ("unban", "Разблокировать: /unban ID"),
@@ -101,8 +102,10 @@ def price_str(settings: Settings) -> str:
 
 
 def help_text(settings: Settings, admin: bool = False) -> str:
+    channel = (f"\n\n📣 Свежие слоты и кейсы — в нашем канале {settings.channel}"
+               if settings.channel and not admin else "")
     return (HELP.replace("{price}", price_str(settings)).replace("{docs_price}", f"{settings.docs_price:.0f}")
-            .replace("{family}", f"{settings.family_price:.0f}") + (ADMIN_HELP if admin else ""))
+            .replace("{family}", f"{settings.family_price:.0f}") + channel + (ADMIN_HELP if admin else ""))
 
 
 FAQ = (
@@ -138,7 +141,7 @@ TERMS = (
     "только если его разрешит визовый центр.\n\n"
     "4. <b>Какой слот.</b> Записываем в первый подходящий слот в указанные тобой даты. Слоты выпускает консульство, "
     "поэтому гарантировать конкретную дату не может никто.\n\n"
-    "5. <b>Сроки.</b> Визовые центры открывают слоты почти накануне: запись может прийти всего за 2–7 дней до подачи. "
+    "5. <b>Сроки.</b> Иногда запись может прийти всего за 2–7 дней до подачи. "
     "Документы, на сбор которых нужно время, готовь заранее.\n\n"
     "6. <b>Сборы.</b> Если визовый центр берёт сбор при записи (сейчас — Венгрия), ты оплачиваешь его заранее, мы платим "
     "его при брони, квитанция будет в подтверждении записи. Если до брони отменишь заявку или мы не найдём слот — сбор вернём. "
@@ -171,7 +174,7 @@ async def setup_commands(bot, settings: Settings) -> None:
     user = [BotCommand(command=c, description=d) for c, d in USER_COMMANDS]
     await bot.set_my_commands(user, scope=BotCommandScopeDefault())
     admin = user + [BotCommand(command=c, description=d) for c, d in ADMIN_COMMANDS]
-    for admin_id in settings.admin_ids:
+    for admin_id in settings.admin_targets:
         try:
             await bot.set_my_commands(admin, scope=BotCommandScopeChat(chat_id=admin_id))
         except Exception:
@@ -274,7 +277,7 @@ async def start(message: Message, command: CommandObject, db: Database, settings
             b.button(text="Разрешить", callback_data=f"allow:{u.id}")
             b.button(text="Заблокировать", callback_data=f"ban:{u.id}")
             kb = b.as_markup()
-        for admin_id in settings.admin_ids:
+        for admin_id in settings.admin_targets:
             try:
                 await message.bot.send_message(admin_id, note, reply_markup=kb)
             except Exception:
@@ -617,6 +620,29 @@ async def broadcast(message: Message, command: CommandObject, db: Database, sett
         await message.answer(f"Рассылка завершена: доставлено {ok} из {len(targets)}.")
 
     asyncio.create_task(job())
+
+
+@router.message(Command("post"))
+async def post_to_channel(message: Message, command: CommandObject, settings: Settings) -> None:
+    """Post to the public channel. Either /post <text>, or reply to any message with /post to repost it."""
+    if not await admin_only(message, settings):
+        return
+    if not settings.channel:
+        await message.answer("Канал не настроен. Добавь CHANNEL=@bestvisaeurope в .env и перезапусти бота.")
+        return
+    try:
+        if message.reply_to_message:
+            await message.bot.copy_message(settings.channel, message.chat.id, message.reply_to_message.message_id)
+        else:
+            text = (command.args or "").strip()
+            if not text:
+                await message.answer("Формат: /post текст — или ответь командой /post на сообщение, чтобы запостить его в канал.")
+                return
+            await message.bot.send_message(settings.channel, text)
+        await message.answer(f"✅ Опубликовано в {settings.channel}")
+    except Exception as e:
+        await message.answer(f"Не вышло запостить: {html.escape(str(e))[:200]}\n"
+                             "Проверь, что бот — админ канала и CHANNEL указан верно.")
 
 
 async def _set_flag(bot, db: Database, uid: int, action: str) -> str:

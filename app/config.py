@@ -15,6 +15,8 @@ class Settings:
     bot_token: str
     database_url: str
     admin_ids: frozenset[int]
+    admin_chat_id: int | None  # Telegram group chat for admin alerts/analytics/backups; falls back to admin_ids
+    channel: str | None        # public channel for announcements, e.g. @bestvisaeurope (bot must be its admin)
     proxy_url: str | None
     poll_interval: int          # seconds between full cycles
     missions: tuple[str, ...]   # empty = auto-discover which countries VFS serves in Cyprus
@@ -27,6 +29,13 @@ class Settings:
     max_order_countries: int    # how many countries one person can have open orders for at once
     docs_price: float = 250.0   # EUR for "we prepare the whole document package"
 
+    @property
+    def admin_targets(self) -> tuple[int, ...]:
+        """Where admin alerts / analytics / backups go: the group chat if set, else the admin DMs."""
+        if self.admin_chat_id:
+            return (self.admin_chat_id,)
+        return tuple(sorted(self.admin_ids))
+
 
 def load() -> Settings:
     missing = [k for k in ("BOT_TOKEN", "DATABASE_URL", "ADMIN_IDS") if not os.getenv(k)]
@@ -36,6 +45,8 @@ def load() -> Settings:
         bot_token=os.environ["BOT_TOKEN"],
         database_url=os.environ["DATABASE_URL"],
         admin_ids=_ids(os.environ["ADMIN_IDS"]),
+        admin_chat_id=(int(os.environ["ADMIN_CHAT_ID"]) if os.getenv("ADMIN_CHAT_ID") else None),
+        channel=(os.getenv("CHANNEL", "").strip() or None),
         proxy_url=os.getenv("PROXY_URL") or None,
         poll_interval=int(os.getenv("POLL_INTERVAL_SEC", "600")),
         missions=_list(os.getenv("MISSIONS", "")),

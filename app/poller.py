@@ -72,7 +72,7 @@ class Poller:
         await self.ss.close()
 
     async def alert_admins(self, text: str) -> None:
-        for uid in self.s.admin_ids:
+        for uid in self.s.admin_targets:
             await self.notify(uid, text)
 
     def page_url(self, code: str) -> str:

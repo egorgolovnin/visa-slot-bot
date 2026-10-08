@@ -694,7 +694,7 @@ async def order_passport_scan(message: Message, state: FSMContext, db: Database,
     raw = await message.bot.download(file_id)
     data, new_name = clean_file(raw.read(), mime, name, "passport")
     # re-upload the cleaned copy into the admin chat so the stored file has no metadata
-    admin_id = next(iter(settings.admin_ids))
+    admin_id = settings.admin_targets[0]
     stored = await message.bot.send_document(admin_id, BufferedInputFile(data, filename=new_name),
                                              caption="📎 скан паспорта (заявка оформляется)", disable_notification=True)
     await state.update_data(passport_scan=stored.document.file_id)
@@ -947,7 +947,7 @@ async def _order_confirm(call: CallbackQuery, state: FSMContext, db: Database, s
     dups = await duplicate_passports(db, people, call.from_user.id, exclude_order=order_id)
     if dups:
         header += "\n⚠️ " + "; ".join(dups)
-    for admin_id in settings.admin_ids:
+    for admin_id in settings.admin_targets:
         await send_admin_card(call.bot, db, admin_id, order_id, settings, header=header)
 
 
@@ -1174,12 +1174,12 @@ async def run_autobook(bot: Bot, db: Database, settings: Settings, poller: Polle
     from . import mailbox
     o = await db.order(oid)
     if not o or o["mission"] != "deu" or o["status"] not in ("new", "in_progress"):
-        await bot.send_message(next(iter(settings.admin_ids)), f"Заявку #{oid} уже нельзя автобронировать.")
+        await bot.send_message(settings.admin_targets[0], f"Заявку #{oid} уже нельзя автобронировать.")
         return
     people = applicant_people(security.decrypt(o["applicant"]))
     applicant = people[0] if people else {}
     applicant.setdefault("phone", o["applicant"] and security.decrypt(o["applicant"]).get("phone"))
-    admin = next(iter(settings.admin_ids))
+    admin = settings.admin_targets[0]
     await bot.send_message(admin, f"🤖 Запускаю автобронь #{oid}… (до минуты)")
 
     async def wait(**kw):
@@ -1363,7 +1363,7 @@ async def issue_invoice(bot: Bot, db: Database, settings: Settings, oid: int) ->
         except payments.PaymentError as e:
             log.error("invoice failed: %s", e)
             pay = f"Стоимость: {o['price_eur']:.0f} €. Реквизиты для оплаты пришлёт поддержка."
-            for a in settings.admin_ids:
+            for a in settings.admin_targets:
                 await notify_client(bot, a, f"⚠️ Не удалось создать счёт для #{oid}: <code>{html.escape(str(e))}</code>")
     else:
         pay = f"Стоимость: {o['price_eur']:.0f} €. Реквизиты для оплаты пришлёт поддержка."
@@ -1376,7 +1376,7 @@ async def issue_invoice(bot: Bot, db: Database, settings: Settings, oid: int) ->
     reached = await notify_client(bot, o["tg_id"], head + pay + pdf_note,
                                   reply_markup=kb.as_markup() if (payments.enabled() or direct_pay.enabled()) else None)
     if not reached:
-        for a in settings.admin_ids:
+        for a in settings.admin_targets:
             await notify_client(bot, a, f"⚠️ Клиент заявки #{oid} недоступен (заблокировал бота или удалил чат). "
                                         "Счёт создан, но сообщение не доставлено.")
     if o["confirmation_file"] and not settings.pdf_after_payment:
@@ -1420,7 +1420,7 @@ async def fee_received(bot: Bot, db: Database, settings: Settings, oid: int, ass
         await payments.delete_invoice(o["fee_invoice_id"])
     await db.log_event(o["tg_id"], "fee_paid", f"#{oid} {amount} {asset}")
     await notify_client(bot, o["tg_id"], f"✅ Сбор по заявке #{oid} получен. Ищем слот — напишем, как только запишем тебя.")
-    for a in settings.admin_ids:
+    for a in settings.admin_targets:
         await send_admin_card(bot, db, a, oid, settings, header=f"✅ Сбор оплачен ({amount} {asset}) — можно бронировать")
 
 
@@ -1436,13 +1436,13 @@ async def cancel_order(bot: Bot, db: Database, settings: Settings, o, by_client:
     refund = (f"\n💸 Сбор {o['fee_eur']:.2f} € уже был оплачен ({html.escape(o['fee_paid'] or '')}) — "
               "верни его клиенту: @CryptoBot → Отправить, или чеком.") if o["fee_paid_at"] else ""
     if by_client:
-        for a in settings.admin_ids:
+        for a in settings.admin_targets:
             await notify_client(bot, a, f"✖️ Клиент сам отменил заявку #{oid} ({html.escape(order_country(o))}).{refund}")
     else:
         await notify_client(bot, o["tg_id"], f"✖️ Заявка #{oid} отменена."
                             + (" Сбор вернём в течение пары дней." if o["fee_paid_at"] else "") + " Вопросы — /support")
         if refund:
-            for a in settings.admin_ids:
+            for a in settings.admin_targets:
                 await notify_client(bot, a, f"Заявка #{oid} отменена.{refund}")
 
 
@@ -1460,7 +1460,7 @@ async def reward_referrer(bot: Bot, db: Database, settings: Settings, buyer_tg: 
                                     "на следующую заявку — применится автоматически. Спасибо, что приводишь друзей!")
     except Exception:
         pass
-    for a in settings.admin_ids:
+    for a in settings.admin_targets:
         await notify_client(bot, a, f"🎁 Реферальная скидка {REFERRAL_PERCENT}% начислена {ref} за друга {buyer_tg}")
 
 
@@ -1481,7 +1481,7 @@ async def mark_paid(bot: Bot, db: Database, settings: Settings, oid: int, asset:
             await bot.send_document(o["tg_id"], o["confirmation_file"], caption=f"Подтверждение записи, заявка #{oid}")
         except Exception:
             log.warning("cannot send pdf for %s", oid)
-    for a in settings.admin_ids:
+    for a in settings.admin_targets:
         await notify_client(bot, a, f"💰 Заявка #{oid} оплачена: {amount} {asset}")
 
 
@@ -1503,7 +1503,7 @@ async def payment_watcher(bot: Bot, db: Database, settings: Settings, every: int
                                         str(inv.get("paid_amount") or inv.get("amount") or ""))
                     elif inv.get("status") == "expired" and not r["expired_notified"]:
                         await db.update_order(r["id"], expired_notified=True)
-                        for a in settings.admin_ids:
+                        for a in settings.admin_targets:
                             await notify_client(bot, a, f"⌛ Счёт по заявке #{r['id']} истёк без оплаты. "
                                                         "Напиши клиенту через бота или выставь новый (🔁 Новый счёт).")
                 fee_rows = await db.awaiting_fee()
@@ -1582,7 +1582,7 @@ async def send_reminders(bot: Bot, db: Database, settings: Settings) -> None:
             await notify_client(bot, o["tg_id"], f"Заявка #{oid} ({html.escape(name)}): даты, которые ты указал, прошли, "
                                 "а подходящий слот так и не появился. Продлим поиск на новые даты?", reply_markup=kb.as_markup())
             await db.update_order(oid, window_asked=True)
-            for a in settings.admin_ids:
+            for a in settings.admin_targets:
                 await notify_client(bot, a, f"🗓 Заявка #{oid}: окно дат клиента истекло, спросили про новые даты.")
 
 
@@ -1617,7 +1617,7 @@ async def client_redate_window(message: Message, state: FSMContext, db: Database
     await db.update_order(oid, date_from=d1, date_to=d2, window_asked=False)
     window = "любые" if kind == "any" else (f"{fmt_date(d1)}–{fmt_date(d2)}" if d2 else f"с {fmt_date(d1)}")
     await message.answer(f"Готово: ищем слот по заявке #{oid} на даты {window} ✓")
-    for a in settings.admin_ids:
+    for a in settings.admin_targets:
         await notify_client(message.bot, a, f"🗓 Заявка #{oid}: клиент указал новые даты — {window}.")
 
 
@@ -1676,7 +1676,7 @@ async def weekly_slots_report(bot: Bot, db: Database, settings: Settings) -> Non
     await db.kv_set("daily_slots_report", day)
     from .slotstats import report
     text = "☀️ <b>Сводка за сутки</b>\n\n" + report(await db.observations(1), 1, settings.tz, await db.first_observation())
-    for a in settings.admin_ids:
+    for a in settings.admin_targets:
         for chunk in [text[i:i + 3800] for i in range(0, len(text), 3800)]:
             await notify_client(bot, a, chunk)
 
@@ -1722,7 +1722,7 @@ async def scan_after_form(message: Message, db: Database, settings: Settings) ->
         fid, mime, name = message.document.file_id, message.document.mime_type, message.document.file_name
     raw = await message.bot.download(fid)
     data, new_name = clean_file(raw.read(), mime, name, f"passport_{oid}")
-    admin = next(iter(settings.admin_ids))
+    admin = settings.admin_targets[0]
     stored = await message.bot.send_document(admin, BufferedInputFile(data, filename=new_name),
                                              caption=f"📎 Скан паспорта к заявке #{oid} (из формы)")
     o = await db.order(int(oid))
@@ -1781,7 +1781,7 @@ async def direct_pay_sent(call: CallbackQuery, db: Database, settings: Settings)
         await call.message.answer("Платёж уже получен, спасибо! 🙌")
         return
     await call.message.answer("Принято! Как только перевод подтвердится в сети (обычно 1–3 минуты), пришлём подтверждение.")
-    for a in settings.admin_ids:
+    for a in settings.admin_targets:
         await notify_client(call.bot, a, f"💸 Клиент сообщил о переводе {row['amount']:.2f} USDT (TRC20) по заявке "
                                          f"#{row['order_id']} ({row['kind']}). Если бот не подтвердит сам за 10 минут — "
                                          f"проверь адрес на tronscan.org и нажми «Оплачено вручную».")
@@ -1807,7 +1807,7 @@ async def watch_direct_payments(bot: Bot, db: Database, settings: Settings) -> N
             await mark_paid(bot, db, settings, p["order_id"], asset, amount)
         else:
             await fee_received(bot, db, settings, p["order_id"], asset, amount)
-        for a in settings.admin_ids:
+        for a in settings.admin_targets:
             await notify_client(bot, a, f"🔗 Перевод по заявке #{p['order_id']}: "
                                         f"<a href=\"https://tronscan.org/#/transaction/{t['tx']}\">tronscan</a>",
                                 disable_web_page_preview=True)
