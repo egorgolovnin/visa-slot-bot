@@ -105,19 +105,22 @@ class VfsSession:
                             headers={**base, "accept": "application/json", "clientsource": clientsource()})
             except Exception as e:
                 log.info("warmup failed: %s", e)
-            payload = {"username": email, "password": rsa_encrypt(password.encode()),
-                       "missioncode": self.mission, "countrycode": self.country, "languageCode": "en-US"}
+            from urllib.parse import urlencode
+            fields = {"username": email, "password": rsa_encrypt(password.encode()),
+                      "missioncode": self.mission, "countrycode": self.country, "languageCode": "en-US"}
             if turnstile:
-                payload |= {"captcha_version": "cloudflare-v1", "captcha_api_key": turnstile}
+                fields |= {"captcha_version": "cloudflare-v1", "captcha_api_key": turnstile}
             if otp:
-                payload["otp"] = otp
+                fields["otp"] = otp
+            body = urlencode(fields)
             headers = {**base, "accept": "application/json, text/plain, */*", "clientsource": clientsource(),
-                       "cfmlift": "mobile", "content-type": "application/json"}
+                       "cfmlift": "mobile", "priority": "u=1, i",
+                       "content-type": "application/x-www-form-urlencoded"}
             r = None
             last_err = None
             for prof in ("chrome131", "chrome124", "chrome120", "chrome116", "chrome110", "chrome"):
                 try:
-                    r = await s.post(f"{LIFT}/user/login", headers=headers, json=payload, impersonate=prof)
+                    r = await s.post(f"{LIFT}/user/login", headers=headers, data=body, impersonate=prof)
                     self.impersonate = prof
                     break
                 except Exception as e:
