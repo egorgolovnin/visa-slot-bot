@@ -105,3 +105,16 @@ def test_direct_pay_parse_and_match():
     pairs = direct_pay.match(pending, t, set())
     assert [(p["id"], tr["tx"]) for p, tr in pairs] == [(1, "aa")]
     assert direct_pay.match(pending, t, {"aa"}) == []
+
+
+def test_parse_start_payload():
+    from app.deeplink import parse_start_payload
+    assert parse_start_payload("wheel-site_home") == ("wheel", "site_home")
+    assert parse_start_payload("wheel") == ("wheel", "wheel")
+    assert parse_start_payload("invite-site_ref") == ("invite", "site_ref")
+    assert parse_start_payload("order-site_blog_vfs") == ("order", "site_blog_vfs")
+    assert parse_start_payload("community") == (None, "community")
+    assert parse_start_payload("wheelx") == (None, "wheelx")
+    assert parse_start_payload("") == (None, "")
+    assert parse_start_payload(None) == (None, "")
+    assert parse_start_payload("wheel-a b<c>") == ("wheel", "abc")

@@ -260,10 +260,16 @@ async def start(message: Message, command: CommandObject, db: Database, settings
     u = message.from_user
     admin = is_admin(u.id, settings)
     source = (command.args or "").strip()
+    action = None
     if source.startswith("ref") and source[3:].isdigit():
         if is_new_user and await db.set_referrer(u.id, int(source[3:])):
             await db.log_event(u.id, "referred", source[3:])
         source = "referral"
+    else:
+        from .deeplink import parse_start_payload
+        action, source = parse_start_payload(source)
+        if action:
+            await db.log_event(u.id, "deeplink", f"{action}:{source}")
     if source:
         await db.set_source(u.id, re.sub(r"[^\w\-]", "", source))
     name = html.escape(u.full_name + (f" @{u.username}" if u.username else ""))
@@ -289,6 +295,18 @@ async def start(message: Message, command: CommandObject, db: Database, settings
         if source == "case":
             from .cases import start_case
             await start_case(message, state)
+            return
+        if action == "wheel":
+            from .promo import wheel
+            await wheel(message, db)
+            return
+        if action == "invite":
+            from .promo import invite
+            await invite(message, db)
+            return
+        if action == "order":
+            from .orders import order_start
+            await order_start(message, state, db, settings)
             return
         await message.answer(help_text(settings, admin))
     else:
