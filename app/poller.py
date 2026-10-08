@@ -336,10 +336,6 @@ class Poller:
             await self.probe_vfs_fields()
         except Exception:
             log.exception("vfs fields probe")
-        try:
-            await self.probe_vfs_login()
-        except Exception:
-            log.exception("vfs login probe")
         await self.import_open_cases()
         if ABROAD_ON:
             asyncio.create_task(self.discover_abroad())
