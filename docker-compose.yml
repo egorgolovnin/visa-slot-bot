@@ -32,6 +32,7 @@ services:
       DATABASE_URL: postgresql://bot:${POSTGRES_PASSWORD}@db:5432/visabot
       FLARESOLVERR_URL: http://flaresolverr:8191
       PORT: "8080"
+      BROWSER_HEADLESS: virtual
     ports:
       - "8080:8080"
     volumes:

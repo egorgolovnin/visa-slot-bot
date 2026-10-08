@@ -51,7 +51,10 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
 
     token = None
     result = None
-    launch = dict(headless=True, os="windows", humanize=True, proxy=proxy_cfg)
+    import os as _os
+    headless = _os.getenv("BROWSER_HEADLESS", "virtual")  # "virtual" => xvfb non-headless, "true"/"false" override
+    hl = True if headless == "true" else (False if headless == "false" else "virtual")
+    launch = dict(headless=hl, os="windows", humanize=True, proxy=proxy_cfg)
     try:
         import camoufox.locale  # geoip extra present?
         launch["geoip"] = bool(proxy)
