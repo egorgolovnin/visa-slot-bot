@@ -106,7 +106,22 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                 await _pass_turnstile(page)
                 await asyncio.sleep(3)
             if not target:
-                raise RuntimeError("email field not found in any frame")
+                # dump every input's attributes from whichever frame has them
+                for fr in [page] + page.frames:
+                    try:
+                        els = await fr.query_selector_all("input")
+                    except Exception:
+                        continue
+                    if not els:
+                        continue
+                    for i, el in enumerate(els[:15]):
+                        try:
+                            a = await el.evaluate("e => e.id+'|'+e.name+'|'+e.type+'|'+(e.getAttribute('formcontrolname')||'')+'|'+e.placeholder+'|'+(e.getAttribute('aria-label')||'')")
+                            log.info("vfs_browser INPUT[%d] %s", i, a)
+                        except Exception:
+                            pass
+                    break
+                raise RuntimeError("email field not found by selector; see INPUT dump")
             await target.fill(EMAIL, email, timeout=15000)
             await target.fill(PWD, password, timeout=15000)
             log.info("vfs_browser: filled form in frame %s", (target.url or "main")[:60])
