@@ -59,16 +59,22 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
         page = await browser.new_page()
 
         # capture the login API response to grab the access token
+        login_seen = {"status": None, "body": ""}
+
         async def on_response(resp):
             nonlocal token, result
             if "/user/login" in resp.url:
                 try:
-                    data = await resp.json()
+                    body = await resp.text()
+                    login_seen["status"] = resp.status
+                    login_seen["body"] = body[:200]
+                    log.info("vfs_browser: /user/login -> %s %s", resp.status, body[:150])
+                    data = __import__("json").loads(body)
                     if data.get("accessToken"):
                         token = data["accessToken"]
                         result = data
-                except Exception:
-                    pass
+                except Exception as ex:
+                    log.info("vfs_browser: login resp parse: %s", ex)
         page.on("response", on_response)
 
         log.info("vfs_browser: goto login")
@@ -112,13 +118,31 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                 raise RuntimeError("email/password inputs not found")
             await _pass_turnstile(page)
             await asyncio.sleep(1)
-            # click the submit button (enable it first if Angular left it disabled)
-            await page.evaluate("""() => {
-                const b = [...document.querySelectorAll('button')].find(x =>
-                    /sign ?in|log ?in|login|submit|continue/i.test(x.textContent));
-                if (b) { b.disabled = false; b.click(); }
-            }""")
-            log.info("vfs_browser: submitted")
+            # click the submit button like a real user (Angular listens on a real click / form submit)
+            clicked = False
+            for sel in ("button:has-text('Sign In')", "button:has-text('Sign in')", "button:has-text('Login')",
+                        "button:has-text('Log in')", "button[type=submit]"):
+                try:
+                    b = await page.query_selector(sel)
+                    if b:
+                        try:
+                            await b.scroll_into_view_if_needed(timeout=3000)
+                        except Exception:
+                            pass
+                        await b.click(timeout=5000, force=True)
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+            if not clicked:
+                # fallback: submit the form or press Enter in the password field
+                await page.keyboard.press("Enter")
+            log.info("vfs_browser: submit clicked=%s", clicked)
+            # give the login request time to fly
+            for _ in range(20):
+                if token or login_seen["status"]:
+                    break
+                await asyncio.sleep(1)
         except Exception as e:
             try:
                 (STATE_DIR / "last_login.html").write_text((await page.content())[:200000], encoding="utf-8")
