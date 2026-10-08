@@ -50,6 +50,7 @@ ADMIN_COMMANDS = [
     ("discover", "Переразведка стран VFS"),
     ("vfslogin", "Проверить автовход в VFS"),
     ("slotprobe", "Разведка эндпоинтов слотов"),
+    ("rkform", "Германия: показать форму записи"),
 ]
 
 HELP = (
@@ -749,6 +750,18 @@ async def slotprobe(message: Message, poller: Poller, settings: Settings) -> Non
         await message.answer(await probe_account(sess))
     except Exception as e:
         await message.answer(f"Ошибка: <code>{html.escape(str(e))[:400]}</code>")
+
+
+@router.message(Command("rkform"))
+async def rkform(message: Message, poller: Poller, settings: Settings) -> None:
+    if not await admin_only(message, settings):
+        return
+    await message.answer("Иду к форме записи Германии (ничего не отправляю)…")
+    from .rk_book import inspect_form
+    try:
+        await message.answer(await inspect_form(poller.rk))
+    except Exception as e:
+        await message.answer(f"Ошибка: <code>{html.escape(str(e))[:300]}</code>")
 
 
 @router.message(Command("discover"))

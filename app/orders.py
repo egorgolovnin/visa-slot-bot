@@ -1059,7 +1059,9 @@ def admin_buttons(o) -> InlineKeyboardBuilder:
     if st == "new":
         kb.button(text="🔎 Взять в работу", callback_data=f"oa:take:{oid}")
     if st in ("new", "in_progress"):
-        kb.button(text="📅 Забронировано", callback_data=f"oa:book:{oid}")
+        if o["mission"] == "deu":
+            kb.button(text="🤖 Забронировать автоматически", callback_data=f"oa:autobook:{oid}")
+        kb.button(text="📅 Забронировано (вручную)", callback_data=f"oa:book:{oid}")
     if st == "booked":
         kb.button(text="💰 Оплачено вручную", callback_data=f"oa:paid:{oid}")
         kb.button(text="🔁 Новый счёт", callback_data=f"oa:invoice:{oid}")
@@ -1167,7 +1169,42 @@ async def order_card_cmd(message: Message, command: CommandObject, db: Database,
 
 
 @router.callback_query(F.data.startswith("oa:"))
-async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
+async def run_autobook(bot: Bot, db: Database, settings: Settings, poller: Poller, oid: int) -> None:
+    from .rk_book import book, BookingError
+    from . import mailbox
+    o = await db.order(oid)
+    if not o or o["mission"] != "deu" or o["status"] not in ("new", "in_progress"):
+        await bot.send_message(next(iter(settings.admin_ids)), f"Заявку #{oid} уже нельзя автобронировать.")
+        return
+    people = applicant_people(security.decrypt(o["applicant"]))
+    applicant = people[0] if people else {}
+    applicant.setdefault("phone", o["applicant"] and security.decrypt(o["applicant"]).get("phone"))
+    admin = next(iter(settings.admin_ids))
+    await bot.send_message(admin, f"🤖 Запускаю автобронь #{oid}… (до минуты)")
+
+    async def wait(**kw):
+        return await mailbox.wait_for(**kw) if mailbox.enabled() else None
+    try:
+        res = await book(poller.rk, applicant, o["date_from"], o["date_to"], mailbox_wait=wait)
+    except BookingError as e:
+        await bot.send_message(admin, f"⚠️ Автобронь #{oid} не удалась: {html.escape(str(e))}. Забронируй вручную.")
+        return
+    except Exception as e:
+        log.exception("autobook")
+        await bot.send_message(admin, f"⚠️ Автобронь #{oid} ошибка: <code>{html.escape(str(e))[:200]}</code>")
+        return
+    if not res.get("ok"):
+        await bot.send_message(admin, f"⚠️ Автобронь #{oid}: {html.escape(res.get('detail',''))}. Попробуй вручную.")
+        return
+    when = res["when"]
+    await db.update_order(oid, status="booked", booked_at=datetime.now(timezone.utc), appointment=f"{when}, посольство Германии",
+                          price_eur=await service_total(db, settings, "deu", people))
+    conf = "✅ подтверждена письмом" if res.get("confirmed") else "⏳ ждёт подтверждения (проверь почту)"
+    await bot.send_message(admin, f"🎉 Автобронь #{oid} удалась! Запись: <b>{when}</b>, {conf}.\n{html.escape(res.get('detail',''))}")
+    await issue_invoice(bot, db, settings, oid)
+
+
+async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings, poller: Poller) -> None:
     if not is_admin(call.from_user.id, settings):
         await call.answer("Только для админа", show_alert=True)
         return
@@ -1177,6 +1214,21 @@ async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, sett
         await state.clear()
         await call.message.edit_text("Ок, бронь не вносим.")
         await call.answer()
+        return
+    if action == "autobook":
+        a = applicant_people(security.decrypt(o["applicant"]))
+        who = a[0].get("full_name") if a else "?"
+        kb2 = InlineKeyboardBuilder()
+        kb2.button(text="✅ Да, бронировать", callback_data=f"oa:autogo:{oid}")
+        kb2.button(text="✖️ Нет", callback_data=f"oa:open:{oid}")
+        await call.message.answer(f"🤖 Автобронь заявки #{oid} ({order_country(o)}) на <b>{html.escape(who)}</b>?\n"
+                                  "Бот сам пройдёт капчу, заполнит форму и отправит. Подтверждение из письма "
+                                  "откроет автоматически.", reply_markup=kb2.as_markup())
+        await call.answer()
+        return
+    if action == "autogo":
+        await call.answer()
+        await run_autobook(call.bot, db, settings, poller, oid)
         return
     o = await db.order(oid)
     if not o:
