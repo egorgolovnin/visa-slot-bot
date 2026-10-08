@@ -49,6 +49,7 @@ ADMIN_COMMANDS = [
     ("health", "Состояние проверок"),
     ("discover", "Переразведка стран VFS"),
     ("vfslogin", "Проверить автовход в VFS"),
+    ("slotprobe", "Разведка эндпоинтов слотов"),
 ]
 
 HELP = (
@@ -684,6 +685,26 @@ async def vfslogin(message: Message, poller: Poller, settings: Settings) -> None
             await message.answer(f"⚠️ Токен не получен. cf_clearance: {'есть' if c else 'нет'}.")
     except Exception as e:
         await message.answer(f"⚠️ Вход не прошёл: <code>{html.escape(str(e))[:400]}</code>")
+
+
+@router.message(Command("slotprobe"))
+async def slotprobe(message: Message, poller: Poller, settings: Settings) -> None:
+    if not await admin_only(message, settings):
+        return
+    await message.answer("Логинюсь в VFS и смотрю, что отдают эндпоинты слотов из аккаунта…")
+    from . import mailbox, vfs_auth
+    from .slot_probe import probe_account
+
+    async def wait(**kw):
+        return await mailbox.wait_for(**kw) if mailbox.enabled() else None
+    try:
+        sess = await vfs_auth.login_austria(wait, poller.s.proxy_url)
+        if not (sess and sess.alive):
+            await message.answer("Не вошёл — сначала нужен успешный /vfslogin.")
+            return
+        await message.answer(await probe_account(sess))
+    except Exception as e:
+        await message.answer(f"Ошибка: <code>{html.escape(str(e))[:400]}</code>")
 
 
 @router.message(Command("discover"))
