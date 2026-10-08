@@ -46,8 +46,13 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
 
     token = None
     result = None
-    async with AsyncCamoufox(headless=True, os="windows", humanize=True, proxy=proxy_cfg,
-                             geoip=bool(proxy)) as browser:
+    launch = dict(headless=True, os="windows", humanize=True, proxy=proxy_cfg)
+    try:
+        import camoufox.locale  # geoip extra present?
+        launch["geoip"] = bool(proxy)
+    except Exception:
+        pass
+    async with AsyncCamoufox(**launch) as browser:
         ctx_args = {}
         if state_file.exists():
             ctx_args["storage_state"] = str(state_file)

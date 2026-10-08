@@ -6,4 +6,4 @@ tzdata
 cryptography==46.0.6
 pypdf==5.9.0
 pycountry==26.2.16
-camoufox>=0.4
+camoufox[geoip]>=0.4
