@@ -116,8 +116,32 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                 await asyncio.sleep(3)
             if not filled:
                 raise RuntimeError("email/password inputs not found")
+            # re-enter by real typing so Angular Material marks the controls valid
+            try:
+                await page.evaluate("""() => {
+                    const vis = el => el.offsetParent !== null && !el.disabled;
+                    const ins = [...document.querySelectorAll('input')].filter(vis);
+                    const pass = ins.find(e => e.type === 'password');
+                    const mail = ins.find(e => e !== pass);
+                    if (mail) { mail.value=''; mail.setAttribute('data-mail','1'); }
+                    if (pass) { pass.value=''; pass.setAttribute('data-pass','1'); }
+                }""")
+                await page.click("input[data-mail]", timeout=5000)
+                await page.type("input[data-mail]", email, delay=40)
+                await page.click("input[data-pass]", timeout=5000)
+                await page.type("input[data-pass]", password, delay=40)
+                await page.keyboard.press("Tab")
+                log.info("vfs_browser: typed credentials")
+            except Exception as e:
+                log.info("vfs_browser: typing fallback failed: %s", e)
             await _pass_turnstile(page)
             await asyncio.sleep(1)
+            btnstate = await page.evaluate("""() => {
+                const b = [...document.querySelectorAll('button')].find(x =>
+                    /sign ?in|log ?in|login|submit/i.test(x.textContent));
+                return b ? {found:true, disabled:b.disabled, text:b.textContent.trim().slice(0,20)} : {found:false};
+            }""")
+            log.info("vfs_browser: submit button %s", btnstate)
             # click the submit button like a real user (Angular listens on a real click / form submit)
             clicked = False
             for sel in ("button:has-text('Sign In')", "button:has-text('Sign in')", "button:has-text('Login')",
