@@ -669,67 +669,25 @@ async def health(message: Message, db: Database, poller: Poller, settings: Setti
 async def vfslogin(message: Message, command: CommandObject, poller: Poller, settings: Settings) -> None:
     if not await admin_only(message, settings):
         return
-    from . import cf, mailbox, vfs_auth
+    from . import mailbox, vfs_auth, vfs_browser
     if not vfs_auth.accounts():
         await message.answer("Нет VFS_ACCOUNTS в переменных.")
         return
     mission = (command.args or "aut").strip().lower()
-    proxy = poller.s.proxy_url
-    diag = ["🔬 Диагностика входа VFS (" + mission + ")"]
-    from curl_cffi.requests import AsyncSession
-    # 1) exit IP of the proxy
-    try:
-        async with AsyncSession(proxies={"http": proxy, "https": proxy} if proxy else None, timeout=20) as s:
-            ip = (await s.get("https://api.ipify.org", impersonate="chrome124")).text
-        diag.append(f"Выходной IP: {ip}")
-    except Exception as e:
-        diag.append(f"IP не получил: {str(e)[:60]}")
-    # 2) public slot endpoint via proxy — if THIS gives 403102, the IP itself is blocked
-    try:
-        async with AsyncSession(proxies={"http": proxy, "https": proxy} if proxy else None, timeout=30) as s:
-            r = await s.post("https://lift-api.vfsglobal.com/appointment/centerwithearliestslot",
-                             json={"missionCode": mission, "countryCode": "cyp", "cultureCode": "en-US"},
-                             headers={"origin": "https://visa.vfsglobal.com", "referer": "https://visa.vfsglobal.com/",
-                                      "route": f"cyp/en/{mission}"}, impersonate="chrome124")
-        tag = "403102" if "403102" in r.text else ("ok" if r.status_code == 200 else str(r.status_code))
-        diag.append(f"Публичный эндпоинт через прокси: {tag}")
-    except Exception as e:
-        diag.append(f"Публичный: {str(e)[:60]}")
-    await message.answer("\n".join(diag))
-    # 3) actual login
-    await message.answer("Логинюсь…")
+    await message.answer(f"Логинюсь в VFS ({mission}) через Camoufox "
+                         f"(браузер {'готов' if vfs_browser.available() else 'НЕ установлен'})… до минуты.")
 
     async def wait(**kw):
         return await mailbox.wait_for(**kw) if mailbox.enabled() else None
     try:
-        cf.drop("cyp", mission)
-        c = await cf.clearance("cyp", mission, force=True, proxy=proxy) if cf.enabled() else None
-        accs = vfs_auth.accounts()
-        sess = vfs_auth.VfsSession("cyp", mission, proxy)
-        try:
-            await sess.login(accs[0][0], accs[0][1])
-        except vfs_auth.OtpRequired:
-            from datetime import datetime, timezone, timedelta
-            code = await wait(sender_like="vfs", pattern=r"\b(\d{4,8})\b",
-                              since=datetime.now(timezone.utc) - timedelta(minutes=2), timeout=180)
-            if code:
-                await sess.login(accs[0][0], accs[0][1], otp=code)
-        if sess.alive:
-            await message.answer(f"✅ Вход прошёл! cf_clearance: {'есть' if c else 'нет'}. Автобронь возможна.")
-            return
+        sess = await vfs_auth.login_session("cyp", mission, poller.s.proxy_url, wait)
+        if sess and sess.alive:
+            await message.answer("✅ Вход прошёл! Токен получен — автобронь VFS возможна.")
+        else:
+            await message.answer("⚠️ Токен не получен. Смотрю логи: "
+                                 "<code>docker compose logs bot | grep vfs_browser</code>")
     except Exception as e:
-        await message.answer(f"curl_cffi: <code>{html.escape(str(e))[:200]}</code>")
-    # fallback: full browser login via FlareSolverr
-    try:
-        from urllib.parse import urlencode
-        from datetime import datetime, timezone
-        body = urlencode({"username": accs[0][0], "password": vfs_auth.rsa_encrypt(accs[0][1].encode()),
-                          "missioncode": mission, "countrycode": "cyp", "languageCode": "en-US"})
-        st_, resp, ua = await cf.browser_post("https://lift-api.vfsglobal.com/user/login", body, proxy=proxy)
-        tag = "ok (есть токен)" if "accessToken" in resp else ("403102" if "403102" in resp else f"{st_}")
-        await message.answer(f"Браузерный логин (FlareSolverr): {tag}\n<code>{html.escape(resp[:300])}</code>")
-    except Exception as e:
-        await message.answer(f"Браузерный логин: <code>{html.escape(str(e))[:200]}</code>")
+        await message.answer(f"⚠️ Вход не прошёл: <code>{html.escape(str(e))[:400]}</code>")
 
 
 @router.message(Command("slotprobe"))
