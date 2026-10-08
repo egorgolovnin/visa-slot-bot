@@ -48,6 +48,7 @@ ADMIN_COMMANDS = [
     ("unban", "Разблокировать: /unban ID"),
     ("health", "Состояние проверок"),
     ("discover", "Переразведка стран VFS"),
+    ("vfslogin", "Проверить автовход в VFS"),
 ]
 
 HELP = (
@@ -660,6 +661,29 @@ async def flag_cb(call: CallbackQuery, db: Database, settings: Settings) -> None
 async def health(message: Message, db: Database, poller: Poller, settings: Settings) -> None:
     if await admin_only(message, settings):
         await message.answer(await health_text(db, poller, ZoneInfo(settings.tz)))
+
+
+@router.message(Command("vfslogin"))
+async def vfslogin(message: Message, poller: Poller, settings: Settings) -> None:
+    if not await admin_only(message, settings):
+        return
+    await message.answer("Пробую войти в VFS (Австрия) через FlareSolverr…")
+    from . import cf, mailbox, vfs_auth
+    if not vfs_auth.accounts():
+        await message.answer("Нет VFS_ACCOUNTS в переменных.")
+        return
+
+    async def wait(**kw):
+        return await mailbox.wait_for(**kw) if mailbox.enabled() else None
+    try:
+        c = await cf.clearance("cyp", "aut", force=True) if cf.enabled() else None
+        sess = await vfs_auth.login_austria(wait, poller.s.proxy_url)
+        if sess and sess.alive:
+            await message.answer(f"✅ Вход прошёл. cf_clearance: {'есть' if c else 'нет'}. Токен получен, автобронь возможна.")
+        else:
+            await message.answer(f"⚠️ Токен не получен. cf_clearance: {'есть' if c else 'нет'}.")
+    except Exception as e:
+        await message.answer(f"⚠️ Вход не прошёл: <code>{html.escape(str(e))[:400]}</code>")
 
 
 @router.message(Command("discover"))

@@ -302,34 +302,12 @@ class Poller:
             log.exception("abroad discovery")
 
     async def probe_vfs_login(self) -> None:
-        """One-off: check whether we can log in to the Austria VFS account from the server (no captcha)."""
-        from . import vfs_auth
-        if not vfs_auth.accounts() or await self.db.kv_get("vfs_login_probe") == "v1":
-            return
-        await self.db.kv_set("vfs_login_probe", "v1")
-        from . import mailbox
-
-        async def wait(**kw):
-            return await mailbox.wait_for(**kw) if mailbox.enabled() else None
-        try:
-            sess = await vfs_auth.login_austria(wait, self.s.proxy_url)
-            if sess and sess.alive:
-                await self.alert_admins("✅ Автовход в VFS (Австрия) работает с сервера, без капчи. "
-                                        "Можно делать автобронь Австрии.")
-            else:
-                await self.alert_admins("⚠️ Автовход в VFS (Австрия): не получил токен. Детали в логах.")
-        except Exception as e:
-            log.warning("vfs login probe: %s", e)
-            await self.alert_admins(f"⚠️ Автовход в VFS (Австрия) пока не прошёл: <code>{str(e)[:200]}</code>\n"
-                                    "Разберусь дальше; на MVP не влияет — бронируешь вручную.")
-
-    async def probe_vfs_login(self) -> None:
         from . import cf, mailbox, vfs_auth
         if not vfs_auth.accounts() or not (cf.enabled() or self.s.proxy_url):
             return  # no Cloudflare bypass available yet: skip login probe to avoid noisy errors
-        if await self.db.kv_get("vfs_login_probe") == "v3":
+        if await self.db.kv_get("vfs_login_probe") == "v4":
             return
-        await self.db.kv_set("vfs_login_probe", "v3")
+        await self.db.kv_set("vfs_login_probe", "v4")
 
         async def wait(**kw):
             return await mailbox.wait_for(**kw) if mailbox.enabled() else None
