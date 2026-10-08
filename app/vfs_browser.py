@@ -80,6 +80,15 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
         PWD = ("input#password, input[type=password], input[formcontrolname=password], "
                "input[name=password], input[autocomplete=current-password]")
         try:
+            await asyncio.sleep(6)
+            try:
+                desc = await page.eval_on_selector_all(
+                    "input, button",
+                    "els => els.map(e => e.tagName+':'+(e.id||'')+'|'+(e.name||'')+'|'+(e.type||'')+"
+                    "'|'+(e.getAttribute('formcontrolname')||'')+'|'+(e.placeholder||'')+'|'+(e.textContent||'').trim().slice(0,20))")
+                log.info("vfs_browser FIELDS: %s", desc)
+            except Exception as e:
+                log.info("vfs_browser: field dump failed: %s", e)
             for attempt in range(4):
                 try:
                     await page.wait_for_selector(EMAIL, timeout=20000, state="visible")
