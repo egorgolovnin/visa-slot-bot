@@ -72,22 +72,34 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
         page.on("response", on_response)
 
         log.info("vfs_browser: goto login")
-        await page.goto(LOGIN_URL.format(country=country, mission=mission), wait_until="domcontentloaded", timeout=timeout * 1000)
+        await page.goto(LOGIN_URL.format(country=country, mission=mission), wait_until="networkidle", timeout=timeout * 1000)
         await _pass_turnstile(page)
-        await asyncio.sleep(3)
-        log.info("vfs_browser: page title=%r url=%s", await page.title(), page.url)
-        # fill the form
+        # Angular renders the form via JS after load — wait for an actual email input to exist
+        EMAIL = ("input#email, input[type=email], input[formcontrolname=email], "
+                 "input[name=email], input[autocomplete=username], input[placeholder*=mail i]")
+        PWD = ("input#password, input[type=password], input[formcontrolname=password], "
+               "input[name=password], input[autocomplete=current-password]")
         try:
-            await page.wait_for_selector("input[type=email], input[formcontrolname=email], #email", timeout=20000)
-            await page.fill("input[type=email], input[formcontrolname=email], #email", email, timeout=15000)
-            await page.fill("input[type=password], input[formcontrolname=password], #password", password, timeout=15000)
+            for attempt in range(4):
+                try:
+                    await page.wait_for_selector(EMAIL, timeout=20000, state="visible")
+                    break
+                except Exception:
+                    await _pass_turnstile(page)
+                    await asyncio.sleep(3)
+                    log.info("vfs_browser: waiting for form, attempt %d, inputs on page=%d",
+                             attempt, len(await page.query_selector_all("input")))
+            await page.fill(EMAIL, email, timeout=15000)
+            await page.fill(PWD, password, timeout=15000)
             log.info("vfs_browser: filled form, solving turnstile before submit")
             await _pass_turnstile(page)
             await asyncio.sleep(1)
-            await page.click("button[type=submit], button:has-text('Sign In'), button:has-text('Login')", timeout=15000)
+            btn = ("button[type=submit], button:has-text('Sign In'), button:has-text('Sign in'), "
+                   "button:has-text('Login'), button:has-text('Log in'), button:has-text('Submit')")
+            await page.click(btn, timeout=15000)
             log.info("vfs_browser: submitted")
         except Exception as e:
-            log.warning("form fill failed: %s", e)
+            log.warning("form fill failed: %s (inputs=%d)", e, len(await page.query_selector_all("input")))
         # wait for the token to arrive
         for _ in range(timeout):
             if token:
