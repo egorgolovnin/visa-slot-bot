@@ -149,8 +149,12 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                 log.info("vfs_browser: typed credentials by keyboard")
             except Exception as e:
                 log.info("vfs_browser: keyboard typing failed: %s", e)
-            # WAIT for Turnstile to actually solve — the Sign In button stays disabled until then
+            # click the Turnstile checkbox, then WAIT for it to solve (button stays disabled until then)
+            await _click_turnstile(page)
             solved = await _pass_turnstile(page, timeout=70)
+            if not solved:
+                await _click_turnstile(page)
+                solved = await _pass_turnstile(page, timeout=40)
             log.info("vfs_browser: turnstile solved=%s", solved)
             # wait for the button to become enabled (Angular enables it once form+turnstile are valid)
             for _ in range(15):
@@ -234,6 +238,34 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
         snippet = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body))[:400]
         log.warning("VFS browser login: no token. visible text: %s", snippet)
         return None
+
+
+async def _click_turnstile(page) -> None:
+    """Click the visible Turnstile checkbox inside its iframe (Camoufox doesn't always auto-click)."""
+    for _ in range(3):
+        try:
+            for fr in page.frames:
+                if "challenges.cloudflare.com" in (fr.url or ""):
+                    for sel in ("input[type=checkbox]", "label", ".cb-c", "#challenge-stage"):
+                        try:
+                            el = await fr.query_selector(sel)
+                            if el:
+                                await el.click(timeout=3000)
+                                log.info("vfs_browser: clicked turnstile checkbox")
+                                return
+                        except Exception:
+                            continue
+            # fallback: click the widget box on the main page by coordinates
+            box = await page.query_selector(".cf-turnstile, [data-sitekey]")
+            if box:
+                bb = await box.bounding_box()
+                if bb:
+                    await page.mouse.click(bb["x"] + 28, bb["y"] + bb["height"] / 2)
+                    log.info("vfs_browser: clicked turnstile by coords")
+                    return
+        except Exception as e:
+            log.info("vfs_browser: turnstile click: %s", e)
+        await asyncio.sleep(2)
 
 
 async def _pass_turnstile(page, timeout: int = 60) -> bool:
