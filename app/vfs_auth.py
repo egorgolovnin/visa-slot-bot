@@ -74,21 +74,36 @@ class VfsSession:
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
         return AsyncSession(impersonate=self.impersonate, proxies=proxies, timeout=40)
 
+    @staticmethod
+    def _chrome_major(ua: str) -> str:
+        m = re.search(r"Chrome/(\d+)", ua or "")
+        return m.group(1) if m else "124"
+
     async def login(self, email: str, password: str, turnstile: str | None = None, otp: str | None = None) -> None:
         from . import cf
         clearance = await cf.clearance(self.country, self.mission) if cf.enabled() else None
         ua = (clearance or {}).get("user_agent") or UA
         if clearance:
             self.cookies.update(clearance["cookies"])
+        # match curl_cffi's TLS/JA3 to the Chrome version FlareSolverr used, else cf_clearance is rejected
+        major = self._chrome_major(ua)
+        for prof in (f"chrome{major}", "chrome124", "chrome120", "chrome"):
+            self.impersonate = prof
+            break
+        m = re.search(r"Chrome/(\d+)", ua or "")
+        ch_ua = (f'"Chromium";v="{major}", "Google Chrome";v="{major}", "Not.A/Brand";v="99"')
         base = {"accept-language": "en-US,en;q=0.9", "origin": "https://visa.vfsglobal.com",
-                "referer": "https://visa.vfsglobal.com/", "route": f"{self.country}/en/{self.mission}",
-                "user-agent": ua}
+                "referer": f"https://visa.vfsglobal.com/{self.country}/en/{self.mission}/login",
+                "route": f"{self.country}/en/{self.mission}", "user-agent": ua,
+                "sec-ch-ua": ch_ua, "sec-ch-ua-mobile": "?0", "sec-ch-ua-platform": '"Windows"',
+                "sec-fetch-site": "same-site", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty"}
         async with self._session() as s:
             if self.cookies:
                 s.cookies.update(self.cookies)
             try:
                 await s.get(f"https://visa.vfsglobal.com/{self.country}/en/{self.mission}/login",
-                            headers={"accept": "text/html", "user-agent": UA})
+                            headers={"accept": "text/html,application/xhtml+xml", "user-agent": ua,
+                                     "sec-ch-ua": ch_ua, "sec-fetch-mode": "navigate", "sec-fetch-dest": "document"})
                 await s.get(f"{LIFT}/configuration/fields/{self.mission}/{self.country}",
                             headers={**base, "accept": "application/json", "clientsource": clientsource()})
             except Exception as e:
@@ -102,6 +117,7 @@ class VfsSession:
             headers = {**base, "accept": "application/json, text/plain, */*", "clientsource": clientsource(),
                        "cfmlift": "mobile", "content-type": "application/json"}
             r = await s.post(f"{LIFT}/user/login", headers=headers, json=payload)
+            log.info("VFS login status=%s len=%s ua_major=%s prof=%s", r.status_code, len(r.text or ""), major, self.impersonate)
             text = r.text or ""
             if r.status_code == 403 and ("Just a moment" in text[:300] or "<!DOCTYPE" in text[:50]):
                 cf.drop(self.country, self.mission)  # stale clearance: next try re-solves
