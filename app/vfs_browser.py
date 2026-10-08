@@ -26,10 +26,15 @@ def available() -> bool:
         return False
 
 
+STEPS: list[str] = []  # last login attempt's step trace, for reporting to the admin
+
+
 async def login(country: str, mission: str, email: str, password: str, proxy: str | None = None,
                 timeout: int = 90) -> dict | None:
     """Returns {'token': str, 'cookies': {...}, 'user_agent': str} or None. Runs the whole browser login."""
     from camoufox.async_api import AsyncCamoufox
+    STEPS.clear()
+    def step(m): STEPS.append(m); log.info("vfs_browser STEP: %s", m)
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     state_file = STATE_DIR / f"vfs_{country}_{mission}.json"
@@ -69,6 +74,7 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                     login_seen["status"] = resp.status
                     login_seen["body"] = body[:200]
                     log.info("vfs_browser: /user/login -> %s %s", resp.status, body[:150])
+                    STEPS.append(f"ответ входа: {resp.status} {body[:80]}")
                     data = __import__("json").loads(body)
                     if data.get("accessToken"):
                         token = data["accessToken"]
@@ -123,6 +129,7 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                 log.info("vfs_browser fill try %d: %s", attempt, res)
                 if res.get("mail") and res.get("pass"):
                     filled = True
+                    step(f"поля найдены ({res.get('mailInfo')})")
                     break
                 await asyncio.sleep(3)
             if not filled:
@@ -146,7 +153,7 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                     await pe.click(timeout=4000, force=True)
                     await page.keyboard.type(password, delay=50)
                 await page.keyboard.press("Tab")
-                log.info("vfs_browser: typed credentials by keyboard")
+                step("логин/пароль введены")
             except Exception as e:
                 log.info("vfs_browser: keyboard typing failed: %s", e)
             # click the Turnstile checkbox, then WAIT for it to solve (button stays disabled until then)
@@ -155,7 +162,7 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
             if not solved:
                 await _click_turnstile(page)
                 solved = await _pass_turnstile(page, timeout=40)
-            log.info("vfs_browser: turnstile solved=%s", solved)
+            step(f"Turnstile {'пройден' if solved else 'НЕ пройден'}")
             # wait for the button to become enabled (Angular enables it once form+turnstile are valid)
             for _ in range(15):
                 st = await page.evaluate("""() => {
@@ -170,7 +177,7 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                     /sign ?in|log ?in|login|submit/i.test(x.textContent));
                 return b ? {found:true, disabled:b.disabled, text:b.textContent.trim().slice(0,20)} : {found:false};
             }""")
-            log.info("vfs_browser: submit button %s", btnstate)
+            step(f"кнопка Sign In: {'активна' if btnstate.get('disabled') is False else 'заблокирована'}")
             try:
                 await page.screenshot(path=str(STATE_DIR / "step_filled.png"))
             except Exception:
@@ -194,7 +201,7 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
             if not clicked:
                 # fallback: submit the form or press Enter in the password field
                 await page.keyboard.press("Enter")
-            log.info("vfs_browser: submit clicked=%s", clicked)
+            step(f"Sign In нажата (clicked={clicked})")
             # give the login request time to fly
             for _ in range(20):
                 if token or login_seen["status"]:
@@ -226,7 +233,7 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
         ua = await page.evaluate("navigator.userAgent")
         if token:
             await page.context.storage_state(path=str(state_file))
-            log.info("VFS browser login ok %s-%s", country, mission)
+            step("✅ токен получен")
             return {"token": token, "cookies": cookies, "user_agent": ua}
         try:
             body = await page.content()
