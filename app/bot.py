@@ -665,22 +665,56 @@ async def health(message: Message, db: Database, poller: Poller, settings: Setti
 
 
 @router.message(Command("vfslogin"))
-async def vfslogin(message: Message, poller: Poller, settings: Settings) -> None:
+async def vfslogin(message: Message, command: CommandObject, poller: Poller, settings: Settings) -> None:
     if not await admin_only(message, settings):
         return
-    await message.answer("Пробую войти в VFS (Австрия) через FlareSolverr…")
     from . import cf, mailbox, vfs_auth
     if not vfs_auth.accounts():
         await message.answer("Нет VFS_ACCOUNTS в переменных.")
         return
+    mission = (command.args or "aut").strip().lower()
+    proxy = poller.s.proxy_url
+    diag = ["🔬 Диагностика входа VFS (" + mission + ")"]
+    from curl_cffi.requests import AsyncSession
+    # 1) exit IP of the proxy
+    try:
+        async with AsyncSession(proxies={"http": proxy, "https": proxy} if proxy else None, timeout=20) as s:
+            ip = (await s.get("https://api.ipify.org", impersonate="chrome124")).text
+        diag.append(f"Выходной IP: {ip}")
+    except Exception as e:
+        diag.append(f"IP не получил: {str(e)[:60]}")
+    # 2) public slot endpoint via proxy — if THIS gives 403102, the IP itself is blocked
+    try:
+        async with AsyncSession(proxies={"http": proxy, "https": proxy} if proxy else None, timeout=30) as s:
+            r = await s.post("https://lift-api.vfsglobal.com/appointment/centerwithearliestslot",
+                             json={"missionCode": mission, "countryCode": "cyp", "cultureCode": "en-US"},
+                             headers={"origin": "https://visa.vfsglobal.com", "referer": "https://visa.vfsglobal.com/",
+                                      "route": f"cyp/en/{mission}"}, impersonate="chrome124")
+        tag = "403102" if "403102" in r.text else ("ok" if r.status_code == 200 else str(r.status_code))
+        diag.append(f"Публичный эндпоинт через прокси: {tag}")
+    except Exception as e:
+        diag.append(f"Публичный: {str(e)[:60]}")
+    await message.answer("\n".join(diag))
+    # 3) actual login
+    await message.answer("Логинюсь…")
 
     async def wait(**kw):
         return await mailbox.wait_for(**kw) if mailbox.enabled() else None
     try:
-        c = await cf.clearance("cyp", "aut", force=True, proxy=poller.s.proxy_url) if cf.enabled() else None
-        sess = await vfs_auth.login_austria(wait, poller.s.proxy_url)
-        if sess and sess.alive:
-            await message.answer(f"✅ Вход прошёл. cf_clearance: {'есть' if c else 'нет'}. Токен получен, автобронь возможна.")
+        cf.drop("cyp", mission)
+        c = await cf.clearance("cyp", mission, force=True, proxy=proxy) if cf.enabled() else None
+        accs = vfs_auth.accounts()
+        sess = vfs_auth.VfsSession("cyp", mission, proxy)
+        try:
+            await sess.login(accs[0][0], accs[0][1])
+        except vfs_auth.OtpRequired:
+            from datetime import datetime, timezone, timedelta
+            code = await wait(sender_like="vfs", pattern=r"\b(\d{4,8})\b",
+                              since=datetime.now(timezone.utc) - timedelta(minutes=2), timeout=180)
+            if code:
+                await sess.login(accs[0][0], accs[0][1], otp=code)
+        if sess.alive:
+            await message.answer(f"✅ Вход прошёл! cf_clearance: {'есть' if c else 'нет'}. Автобронь возможна.")
         else:
             await message.answer(f"⚠️ Токен не получен. cf_clearance: {'есть' if c else 'нет'}.")
     except Exception as e:
