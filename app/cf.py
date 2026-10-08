@@ -21,8 +21,10 @@ def enabled() -> bool:
     return bool(os.getenv("FLARESOLVERR_URL"))
 
 
-async def clearance(country: str, mission: str, force: bool = False) -> dict | None:
-    """Returns {'cookies': {...}, 'user_agent': str} for VFS, or None if FlareSolverr is unavailable."""
+async def clearance(country: str, mission: str, force: bool = False, proxy: str | None = None) -> dict | None:
+    """Returns {'cookies': {...}, 'user_agent': str} for VFS, or None if FlareSolverr is unavailable.
+    When a proxy is given, FlareSolverr solves Cloudflare THROUGH it, so cf_clearance matches the login IP."""
+    proxy = proxy or os.getenv("PROXY_URL") or None
     key = f"{country}/{mission}"
     cached = _cache.get(key)
     if cached and not force and time.time() - cached["at"] < TTL:
@@ -32,6 +34,8 @@ async def clearance(country: str, mission: str, force: bool = False) -> dict | N
         return None
     url = f"https://visa.vfsglobal.com/{country}/en/{mission}/login"
     payload = {"cmd": "request.get", "url": url, "maxTimeout": 60000}
+    if proxy:
+        payload["proxy"] = {"url": proxy}
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=90)) as s:
             async with s.post(f"{base}/v1", json=payload) as r:

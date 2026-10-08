@@ -677,7 +677,7 @@ async def vfslogin(message: Message, poller: Poller, settings: Settings) -> None
     async def wait(**kw):
         return await mailbox.wait_for(**kw) if mailbox.enabled() else None
     try:
-        c = await cf.clearance("cyp", "aut", force=True) if cf.enabled() else None
+        c = await cf.clearance("cyp", "aut", force=True, proxy=poller.s.proxy_url) if cf.enabled() else None
         sess = await vfs_auth.login_austria(wait, poller.s.proxy_url)
         if sess and sess.alive:
             await message.answer(f"✅ Вход прошёл. cf_clearance: {'есть' if c else 'нет'}. Токен получен, автобронь возможна.")

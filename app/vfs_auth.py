@@ -81,7 +81,7 @@ class VfsSession:
 
     async def login(self, email: str, password: str, turnstile: str | None = None, otp: str | None = None) -> None:
         from . import cf
-        clearance = await cf.clearance(self.country, self.mission) if cf.enabled() else None
+        clearance = await cf.clearance(self.country, self.mission, proxy=self.proxy) if cf.enabled() else None
         ua = (clearance or {}).get("user_agent") or UA
         if clearance:
             self.cookies.update(clearance["cookies"])
