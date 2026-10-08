@@ -142,6 +142,10 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                 return b ? {found:true, disabled:b.disabled, text:b.textContent.trim().slice(0,20)} : {found:false};
             }""")
             log.info("vfs_browser: submit button %s", btnstate)
+            try:
+                await page.screenshot(path=str(STATE_DIR / "step_filled.png"))
+            except Exception:
+                pass
             # click the submit button like a real user (Angular listens on a real click / form submit)
             clicked = False
             for sel in ("button:has-text('Sign In')", "button:has-text('Sign in')", "button:has-text('Login')",
@@ -167,6 +171,15 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                 if token or login_seen["status"]:
                     break
                 await asyncio.sleep(1)
+            try:
+                await page.screenshot(path=str(STATE_DIR / "step_after_submit.png"))
+                txt = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", await page.content()))
+                for kw in ("invalid", "incorrect", "required", "error", "otp", "verification", "captcha", "wrong"):
+                    if kw in txt.lower():
+                        i = txt.lower().index(kw)
+                        log.info("vfs_browser: page mentions '%s': ...%s...", kw, txt[max(0,i-40):i+60])
+            except Exception:
+                pass
         except Exception as e:
             try:
                 (STATE_DIR / "last_login.html").write_text((await page.content())[:200000], encoding="utf-8")
