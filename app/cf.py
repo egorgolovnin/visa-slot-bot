@@ -56,3 +56,18 @@ async def clearance(country: str, mission: str, force: bool = False, proxy: str 
 
 def drop(country: str, mission: str) -> None:
     _cache.pop(f"{country}/{mission}", None)
+
+
+async def browser_post(url: str, post_data: str, proxy: str | None = None) -> tuple[int, str, str]:
+    """POST through FlareSolverr's real browser. Returns (status, body, user_agent). post_data is urlencoded."""
+    base = os.getenv("FLARESOLVERR_URL", "").rstrip("/")
+    if not base:
+        return 0, "no flaresolverr", ""
+    payload = {"cmd": "request.post", "url": url, "postData": post_data, "maxTimeout": 60000}
+    if (proxy or os.getenv("PROXY_URL")):
+        payload["proxy"] = {"url": proxy or os.getenv("PROXY_URL")}
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=90)) as s:
+        async with s.post(f"{base}/v1", json=payload) as r:
+            data = await r.json(content_type=None)
+    sol = (data or {}).get("solution") or {}
+    return sol.get("status", 0), (sol.get("response") or "")[:2000], sol.get("userAgent", "")

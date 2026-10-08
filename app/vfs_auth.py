@@ -149,6 +149,10 @@ class VfsSession:
                 raise LoginError(f"auth fail {err['code']}: {err.get('description', '')}")
             if isinstance(err, str) and err:
                 raise LoginError(f"auth fail: {err[:120]}")
+            if str(data.get("code")) == "403102":
+                log.warning("VFS 403102 full: status=%s resp_headers=%s body=%s",
+                            r.status_code, dict(r.headers), text[:500])
+                raise LoginError("403102 (подробности в логах: resp_headers)")
             if data.get("accessToken"):
                 self.token = data["accessToken"]
                 self.obtained = time.time()
