@@ -79,6 +79,17 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
 
         log.info("vfs_browser: goto login")
         await page.goto(LOGIN_URL.format(country=country, mission=mission), wait_until="networkidle", timeout=timeout * 1000)
+        # accept/close the OneTrust cookie banner so it doesn't intercept clicks
+        for sel in ("#onetrust-accept-btn-handler", "button:has-text('Accept All Cookies')",
+                    "button:has-text('Accept Only Necessary')"):
+            try:
+                b = await page.query_selector(sel)
+                if b:
+                    await b.click(timeout=3000)
+                    log.info("vfs_browser: cookie banner dismissed")
+                    break
+            except Exception:
+                pass
         await _pass_turnstile(page)
         # Angular renders the form via JS after load — wait for an actual email input to exist
         EMAIL = ("input#email, input[type=email], input[formcontrolname=email], "
@@ -116,6 +127,28 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                 await asyncio.sleep(3)
             if not filled:
                 raise RuntimeError("email/password inputs not found")
+            # tag fields, then clear + type with the keyboard so Angular Material marks them valid
+            try:
+                await page.evaluate("""() => {
+                    const vis = el => el.offsetParent !== null && !el.disabled;
+                    const ins = [...document.querySelectorAll('input')].filter(vis);
+                    const pass = ins.find(e => e.type === 'password');
+                    const mail = ins.find(e => e !== pass);
+                    if (mail){ mail.setAttribute('data-vfsmail','1'); mail.value=''; }
+                    if (pass){ pass.setAttribute('data-vfspass','1'); pass.value=''; }
+                }""")
+                me = await page.query_selector("input[data-vfsmail]")
+                pe = await page.query_selector("input[data-vfspass]")
+                if me:
+                    await me.click(timeout=4000, force=True)
+                    await page.keyboard.type(email, delay=50)
+                if pe:
+                    await pe.click(timeout=4000, force=True)
+                    await page.keyboard.type(password, delay=50)
+                await page.keyboard.press("Tab")
+                log.info("vfs_browser: typed credentials by keyboard")
+            except Exception as e:
+                log.info("vfs_browser: keyboard typing failed: %s", e)
             # WAIT for Turnstile to actually solve — the Sign In button stays disabled until then
             solved = await _pass_turnstile(page, timeout=70)
             log.info("vfs_browser: turnstile solved=%s", solved)
