@@ -1,0 +1,67 @@
+---
+import { getCollection, render } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import Breadcrumbs from '../../components/Breadcrumbs.astro';
+import BotButton from '../../components/BotButton.astro';
+import Faq from '../../components/Faq.astro';
+import { BRAND } from '../../site';
+
+export async function getStaticPaths() {
+  const all = (await getCollection('gid')).sort((a, b) => a.data.order - b.data.order);
+  return all.map((entry) => ({ params: { id: entry.id }, props: { entry, all } }));
+}
+const { entry, all } = Astro.props;
+const { Content } = await render(entry);
+const d = entry.data;
+const url = new URL(`/gid/${entry.id}/`, Astro.site).href;
+const fmt = (s: string) => new Date(s + 'T12:00:00Z').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+const article = {
+  '@context': 'https://schema.org', '@type': 'Article', headline: d.title, description: d.description,
+  datePublished: d.published, dateModified: d.updated, inLanguage: 'ru', mainEntityOfPage: url,
+  image: new URL('/og.png', Astro.site).href,
+  author: { '@type': 'Organization', name: `Редакция ${BRAND}`, url: new URL('/o-proekte/', Astro.site).href },
+  publisher: { '@id': new URL('/#org', Astro.site).href },
+  citation: d.sources.map((s) => s.url),
+};
+const related = all.filter((e) => e.id !== entry.id).slice(0, 3);
+const ctaText = { order: 'Записаться через бота', wheel: 'Крутить колесо скидок', invite: 'Получить реферальную ссылку' }[d.cta];
+---
+<Base title={d.seoTitle} description={d.description} ogType="article" published={d.published} modified={d.updated} jsonLd={[article]}>
+  <Breadcrumbs items={[{ name: 'Гид', href: '/gid/' }, { name: d.title, href: `/gid/${entry.id}/` }]} />
+  <article class="wrap article">
+    <header>
+      <h1>{d.title}</h1>
+      <p class="meta small muted">
+        Редакция {BRAND}. Опубликовано <time datetime={d.published}>{fmt(d.published)}</time>{d.updated !== d.published && <>, обновлено <time datetime={d.updated}>{fmt(d.updated)}</time></>}
+      </p>
+    </header>
+    <div class="prose"><Content /></div>
+    <div class="cta-box">
+      <p>Слот поймаем мы. За сервис платите после записи.</p>
+      <BotButton action={d.cta} place={`gid_${entry.id.slice(0, 20)}`}>{ctaText}</BotButton>
+    </div>
+    {d.faq && <Faq items={d.faq.map((f) => ({ q: f.q, a: `<p>${f.a}</p>` }))} />}
+    <section class="sources" aria-labelledby="src-h">
+      <h2 id="src-h">Источники</h2>
+      <ol class="small">{d.sources.map((s) => <li><a href={s.url} rel="noopener" target="_blank">{s.name}</a></li>)}</ol>
+    </section>
+  </article>
+  <aside class="wrap related" aria-labelledby="rel-h">
+    <h2 id="rel-h">Читайте также</h2>
+    <ul>{related.map((r) => <li><a href={`/gid/${r.id}/`}>{r.data.title}</a></li>)}</ul>
+  </aside>
+</Base>
+<style>
+  .article { padding-block: 1.5rem 2rem; }
+  .article header { max-width: 46rem; }
+  .meta { margin-bottom: 2rem; }
+  .prose :global(p:first-of-type) { font-size: var(--step-1); }
+  .cta-box { max-width: 42rem; margin: 2.5rem 0; padding: 1.4rem 1.5rem; background: var(--ink); color: #fff; border-radius: var(--r); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
+  .cta-box p { margin: 0; font-weight: 600; }
+  .sources { max-width: 46rem; margin-top: 2.5rem; }
+  .sources h2, .related h2 { font-size: var(--step-2); }
+  .sources li { margin-bottom: 0.4rem; overflow-wrap: anywhere; }
+  .related { padding-bottom: 3rem; }
+  .related ul { padding-left: 1.2em; }
+  .related li { margin-bottom: 0.5rem; }
+</style>

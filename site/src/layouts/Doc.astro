@@ -1,0 +1,15 @@
+---
+import Base from './Base.astro';
+import Breadcrumbs from '../components/Breadcrumbs.astro';
+interface Props { title: string; seoTitle: string; description: string; path: string; updated?: string; noindex?: boolean }
+const { title, seoTitle, description, path, updated, noindex } = Astro.props;
+const fmt = (s: string) => new Date(s + 'T12:00:00Z').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+---
+<Base title={seoTitle} description={description} noindex={noindex}>
+  <Breadcrumbs items={[{ name: title, href: path }]} />
+  <article class="wrap section-tight">
+    <h1>{title}</h1>
+    {updated && <p class="small muted">Редакция от <time datetime={updated}>{fmt(updated)}</time></p>}
+    <div class="prose"><slot /></div>
+  </article>
+</Base>

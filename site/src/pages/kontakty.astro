@@ -1,0 +1,12 @@
+---
+import Doc from '../layouts/Doc.astro';
+import BotButton from '../components/BotButton.astro';
+import { BOT_USERNAME, CONTACT_EMAIL } from '../site';
+---
+<Doc title="Контакты" seoTitle="Контакты Easy Visa — поддержка в Telegram" path="/kontakty/"
+  description="Как связаться с Easy Visa: поддержка в Telegram-боте по заявкам на запись, изменения и отмена заявки, вопросы о данных.">
+  <h2>Поддержка в Telegram</h2>
+  <p>Быстрее всего ответим в боте <a href={`https://t.me/${BOT_USERNAME}`} rel="noopener" target="_blank">@{BOT_USERNAME}</a>: отправьте команду /support и напишите вопрос. Там же можно изменить или отменить заявку.</p>
+  {CONTACT_EMAIL && (<><h2>Электронная почта</h2><p><a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> — для вопросов о сотрудничестве и запросов по персональным данным.</p></>)}
+  <BotButton action="start" place="contacts">Написать в поддержку</BotButton>
+</Doc>

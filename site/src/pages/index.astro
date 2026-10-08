@@ -1,0 +1,192 @@
+---
+import Base from '../layouts/Base.astro';
+import Wheel from '../components/Wheel.astro';
+import BotButton from '../components/BotButton.astro';
+import Faq from '../components/Faq.astro';
+import { PRICE, WHEEL, REFERRAL_PCT, BOT_COUNTRIES, BRAND, BOT_URL } from '../site';
+import { FAQ_SERVICE } from '../faq-data';
+import { getCollection } from 'astro:content';
+
+const guides = (await getCollection('gid')).sort((a, b) => a.data.order - b.data.order).slice(0, 4);
+const site = {
+  '@context': 'https://schema.org', '@type': 'WebSite', name: BRAND, url: new URL('/', Astro.site).href,
+  inLanguage: 'ru', publisher: { '@id': new URL('/#org', Astro.site).href },
+};
+const service = {
+  '@context': 'https://schema.org', '@type': 'Service',
+  name: 'Запись на подачу документов на шенгенскую визу с Кипра',
+  serviceType: 'Помощь с записью в визовый центр', areaServed: { '@type': 'Country', name: 'Cyprus' },
+  provider: { '@id': new URL('/#org', Astro.site).href }, url: BOT_URL,
+  offers: [
+    { '@type': 'Offer', name: 'Один человек', price: PRICE.person, priceCurrency: 'EUR' },
+    { '@type': 'Offer', name: 'Семья: 2 взрослых и ребёнок', price: PRICE.family, priceCurrency: 'EUR' },
+  ],
+};
+---
+<Base
+  title="Запись на шенгенскую визу с Кипра — Easy Visa"
+  description={`Ловим свободный слот в визовом центре на Кипре и записываем вас. 15 стран, оплата ${PRICE.person} € только после брони. Колесо скидок в Telegram-боте.`}
+  jsonLd={[site, service]}
+>
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <h1>Запись на шенгенскую визу с Кипра без охоты за слотами</h1>
+        <p class="lead">Выберите страну и даты в Telegram-боте. Мы следим за визовыми центрами и записываем вас в первый подходящий слот. За сервис платите после брони: {PRICE.person} € с человека.</p>
+        <div class="hero-ctas">
+          <BotButton action="order" place="home_hero">Записаться в боте</BotButton>
+          <BotButton action="wheel" place="home_hero" variant="ghost">Крутить колесо скидок</BotButton>
+        </div>
+        <ul class="hero-facts">
+          <li><strong>15 стран</strong> через VFS Global и посольство Германии</li>
+          <li><strong>Каждые 10 минут</strong> проверяем свободные даты</li>
+          <li><strong>0 € вперёд</strong> за сервис, оплата после записи</li>
+        </ul>
+      </div>
+      <div class="hero-wheel">
+        <Wheel id="wheel-hero" />
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="how">
+    <div class="wrap">
+      <h2 id="how">Как это работает</h2>
+      <ol class="steps">
+        <li><h3>Заявка в боте</h3><p>Команда /order: страна, удобные даты подачи и данные паспорта. Это занимает 2–3 минуты.</p></li>
+        <li><h3>Ловим слот</h3><p>Бот проверяет визовые центры каждые 10 минут. Подходящая дата появилась — записываем вас.</p></li>
+        <li><h3>Подтверждение</h3><p>Присылаем PDF с записью в бот. Только после этого выставляем счёт за сервис.</p></li>
+        <li><h3>Подача</h3><p>Приходите в назначенное время с документами. Список документов пришлём после выбора страны.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section wheel-band" aria-labelledby="wheel-h">
+    <div class="wrap band-grid">
+      <div>
+        <h2 id="wheel-h">Колесо скидок: один шанс на каждого</h2>
+        <p>Каждый пользователь бота может один раз покрутить колесо и получить скидку на сервис. Выпавшая скидка сама применится к вашей ближайшей заявке.</p>
+        <div class="table-scroll odds">
+          <table>
+            <caption class="visually-hidden">Сектора колеса и шансы</caption>
+            <thead><tr><th scope="col">Скидка</th>{WHEEL.map((s) => <th scope="col">{s.pct}%</th>)}</tr></thead>
+            <tbody><tr><th scope="row">Шанс</th>{WHEEL.map((s) => <td>{s.chance}%</td>)}</tr></tbody>
+          </table>
+        </div>
+        <p class="small band-note">Скидка уменьшает только оплату сервиса, не консульский сбор. Скидки не суммируются. <a href="/koleso-fortuny/">Все условия колеса</a></p>
+        <BotButton action="wheel" place="home_wheel" variant="light">Открыть колесо в Telegram</BotButton>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="why">
+    <div class="wrap">
+      <h2 id="why">Почему так удобнее</h2>
+      <div class="why">
+        <div class="ticket"><h3>Платите за результат</h3><p>Счёт за сервис приходит после того, как запись уже сделана. Не нашли слот — вы ничего не платите.</p></div>
+        <div class="ticket"><h3>Не нужно сидеть на сайте</h3><p>Свободные даты появляются в разное время и быстро исчезают. Проверять сайт вручную больше не нужно.</p></div>
+        <div class="ticket"><h3>Цена ниже, чем у перекупщиков</h3><p>{PRICE.person} € с человека, {PRICE.family} € за семью из двух взрослых и ребёнка. Сборы консульства и визового центра не меняются.</p></div>
+        <div class="ticket"><h3>Данные под защитой</h3><p>Паспортные данные используем только для записи и храним в зашифрованном виде.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section-tight" aria-labelledby="countries">
+    <div class="wrap">
+      <h2 id="countries">Страны, в которые записываем</h2>
+      <ul class="chips">{BOT_COUNTRIES.map((c) => <li>{c.name}</li>)}</ul>
+      <p class="muted">Где подавать, через какую систему идёт запись и что делать с Францией, Испанией и Италией, разобрано в разделе <a href="/strany/">«Куда и как подавать с Кипра»</a>.</p>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="ref">
+    <div class="wrap ref">
+      <div>
+        <h2 id="ref">Приведите друга и получите {REFERRAL_PCT}% на следующую запись</h2>
+        <p>Отправьте другу личную ссылку из бота (команда /invite). Когда он оформит и оплатит запись, вам начислится скидка {REFERRAL_PCT}% на следующую заявку. Друзей может быть сколько угодно.</p>
+        <p><a href="/referalnaya-programma/">Как работает реферальная программа</a></p>
+      </div>
+      <BotButton action="invite" place="home_ref" variant="ghost">Получить ссылку в боте</BotButton>
+    </div>
+  </section>
+
+  <section class="section-tight" aria-labelledby="guides">
+    <div class="wrap">
+      <h2 id="guides">Гид по шенгену с Кипра</h2>
+      <ul class="guide-list">
+        {guides.map((g) => (
+          <li><a href={`/gid/${g.id}/`}><span class="g-title">{g.data.title}</span><span class="g-desc">{g.data.description}</span></a></li>
+        ))}
+      </ul>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap"><Faq items={FAQ_SERVICE} /></div>
+  </section>
+
+  <section class="final">
+    <div class="wrap final-in">
+      <h2>Укажите даты, а слот поймаем мы</h2>
+      <p>Заявка займёт 2–3 минуты. Платите только после записи.</p>
+      <BotButton action="order" place="home_final" variant="light">Записаться в боте</BotButton>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .hero { padding-block: clamp(2rem, 6vw, 4.5rem) clamp(2.5rem, 6vw, 4rem); }
+  .hero-grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: clamp(1.5rem, 4vw, 4rem); align-items: center; }
+  .hero h1 { font-size: clamp(2rem, 1.3rem + 2.6vw, 3.1rem); }
+  .lead { font-size: var(--step-1); color: var(--ink-2); max-width: 36rem; }
+  .hero-ctas { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1.6rem 0 2rem; }
+  .hero-facts { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; color: var(--ink-2); }
+  .hero-facts strong { color: var(--ink); }
+  .hero-wheel { display: flex; justify-content: center; }
+  @media (max-width: 860px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .hero-wheel :global(.wheel) { width: min(78vw, 340px); }
+  }
+
+  .steps { list-style: none; counter-reset: s; padding: 0; margin: 2rem 0 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; }
+  .steps li { counter-increment: s; border-top: 3px solid var(--ink); padding-top: 1rem; }
+  .steps li::before { content: counter(s); font: 700 2.2rem/1 var(--display); color: var(--stamp); display: block; margin-bottom: 0.6rem; }
+  .steps p { color: var(--ink-2); margin: 0; }
+  @media (max-width: 860px) { .steps { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 520px) { .steps { grid-template-columns: 1fr; } }
+
+  .wheel-band { background: var(--navy); color: #e6ecf4; }
+  .wheel-band h2 { color: #fff; }
+  .wheel-band a { color: #ffd34d; }
+  .band-grid { max-width: 46rem; }
+  .band-grid > * { min-width: 0; }
+  .odds { background: transparent; border-color: #3a4c66; }
+  .odds th, .odds td { border-color: #3a4c66; color: #fff; text-align: center; font-size: 1rem; }
+  .odds thead th { background: #26395a; font-family: var(--display); }
+  .odds tbody th { background: transparent; }
+  .band-note { color: #c9d3e0; }
+
+  .why { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.2rem; margin-top: 1.8rem; }
+  .why h3 { margin-bottom: 0.4em; }
+  .why p { color: var(--ink-2); margin: 0; }
+  @media (max-width: 700px) { .why { grid-template-columns: 1fr; } }
+
+  .chips { list-style: none; padding: 0; margin: 1.2rem 0 1.4rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .chips li { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 0.35em 0.95em; font-weight: 500; }
+
+  .ref { display: grid; grid-template-columns: 1fr auto; gap: 2rem; align-items: center; border: 2px solid var(--ink); border-radius: var(--r); padding: clamp(1.4rem, 4vw, 2.5rem); background: var(--card); }
+  .ref p { color: var(--ink-2); max-width: 40rem; }
+  @media (max-width: 760px) { .ref { grid-template-columns: 1fr; } }
+
+  .guide-list { list-style: none; padding: 0; margin: 1.5rem 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0 2rem; }
+  .guide-list a { display: grid; gap: 0.3rem; padding: 1.1rem 0; border-top: 1px solid var(--line); text-decoration: none; color: var(--ink); }
+  .g-title { font-weight: 600; font-size: var(--step-1); }
+  .guide-list a:hover .g-title { color: var(--stamp); }
+  .g-desc { color: var(--ink-2); font-size: var(--step--1); }
+  @media (max-width: 700px) { .guide-list { grid-template-columns: 1fr; } }
+
+  .final { background: var(--stamp-ink); color: #fff; }
+  .final-in { padding-block: clamp(2.5rem, 6vw, 4rem); text-align: center; }
+  .final h2 { color: #fff; }
+  .final p { color: #fff; }
+</style>

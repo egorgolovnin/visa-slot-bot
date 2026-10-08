@@ -1,0 +1,76 @@
+---
+import Base from '../layouts/Base.astro';
+import Breadcrumbs from '../components/Breadcrumbs.astro';
+import BotButton from '../components/BotButton.astro';
+import Faq from '../components/Faq.astro';
+import { PRICE, REFERRAL_PCT, BOT_USERNAME } from '../site';
+import { FAQ_REFERRAL } from '../faq-data';
+
+const saved = Math.round(PRICE.person * REFERRAL_PCT) / 100;
+---
+<Base
+  title="Реферальная программа Easy Visa — 50% за друга"
+  description={`Пригласите друга в бот записи на шенгенскую визу с Кипра. Когда он оплатит запись, вы получите скидку ${REFERRAL_PCT}% на свою следующую заявку. Условия и пошаговая инструкция.`}
+>
+  <Breadcrumbs items={[{ name: 'Приведи друга', href: '/referalnaya-programma/' }]} />
+  <section class="wrap section-tight rp-hero">
+    <h1>Приведите друга и получите {REFERRAL_PCT}% на следующую запись</h1>
+    <p class="lead">Если вы уже записывались через Easy Visa или только собираетесь, поделитесь своей ссылкой из бота. За каждого друга, который оплатит запись, вы получите скидку {REFERRAL_PCT}% на свою следующую заявку.</p>
+    <BotButton action="invite" place="ref_top">Получить мою ссылку</BotButton>
+  </section>
+
+  <section class="wrap section-tight">
+    <div class="terms-grid">
+      <div class="ticket"><h2 class="t">Вы получаете</h2><p>Скидку {REFERRAL_PCT}% на сервис по следующей заявке. При цене {PRICE.person} € это {saved.toString().replace('.', ',')} € экономии.</p></div>
+      <div class="ticket"><h2 class="t">Когда</h2><p>Сразу после того, как друг оплатил свою запись. Бот пришлёт уведомление.</p></div>
+      <div class="ticket"><h2 class="t">Сколько друзей</h2><p>Без ограничений. Одна скидка за каждого оплатившего друга.</p></div>
+    </div>
+  </section>
+
+  <section class="wrap section-tight prose">
+    <h2>Как получить ссылку</h2>
+    <ol>
+      <li>Откройте бота <a href={`https://t.me/${BOT_USERNAME}`} rel="noopener" target="_blank">@{BOT_USERNAME}</a> и нажмите «Старт».</li>
+      <li>Отправьте команду /invite. Бот покажет вашу личную ссылку вида <code>t.me/{BOT_USERNAME}?start=ref…</code></li>
+      <li>Нажмите «Поделиться ссылкой» и выберите чат, или скопируйте ссылку вручную.</li>
+      <li>Там же, в /invite, видно, сколько друзей пришло и сколько из них уже оплатили запись.</li>
+    </ol>
+
+    <h2>Кто может участвовать</h2>
+    <p>Любой пользователь бота. Записываться самому для участия необязательно: можно просто порекомендовать сервис друзьям, а скидку использовать, когда понадобится виза.</p>
+
+    <h2>Правила</h2>
+    <ul>
+      <li>Засчитываются только новые пользователи, которые впервые открыли бота по вашей ссылке. Если друг уже пользовался ботом, приглашение не засчитается.</li>
+      <li>Пригласить самого себя со второго аккаунта нельзя. Такие скидки мы вправе отменить.</li>
+      <li>Скидка действует на оплату сервиса, не на консульский сбор и сборы визового центра.</li>
+      <li>К одной заявке применяется одна скидка, самая большая. Остальные ждут следующих заявок. Срока действия нет.</li>
+      <li>Скидку нельзя обменять на деньги, выплат по программе нет.</li>
+    </ul>
+    <p>Полный текст — в <a href="/pravila-akciy/">правилах колеса и реферальной программы</a>.</p>
+
+    <h2>Пример</h2>
+    <p>Анна записалась в Австрию и отправила ссылку двум коллегам. Один из них оформил запись в Германию и оплатил её. Анне пришло сообщение о скидке {REFERRAL_PCT}%. Весной она оформляет заявку в Финляндию и платит за сервис {(PRICE.person - saved).toString().replace('.', ',')} € вместо {PRICE.person} €. Второй коллега открыл бота, но пока не записывался: за него скидка начислится, когда он оплатит свою запись.</p>
+
+    <h2>Где делиться ссылкой</h2>
+    <p>Лучше всего работает личная рекомендация: друзьям и коллегам, которые собираются в поездку, в рабочих и домовых чатах, где обсуждают визы. Не рассылайте ссылку незнакомым людям и не публикуйте её в чужих чатах без разрешения администраторов.</p>
+
+    <div class="callout">
+      <p><strong>Ваша ссылка — личная.</strong> По ней видно, кто вас пригласил, но бот не показывает вам имена и данные друзей, только количество. Друг тоже не видит ваших данных.</p>
+    </div>
+  </section>
+
+  <section class="wrap section-tight"><Faq items={FAQ_REFERRAL} /></section>
+
+  <section class="wrap section-tight" style="padding-bottom:4rem">
+    <BotButton action="invite" place="ref_bottom">Получить мою ссылку</BotButton>
+  </section>
+</Base>
+<style>
+  .rp-hero > * { max-width: 52rem; }
+  .lead { font-size: var(--step-1); color: var(--ink-2); }
+  .terms-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.2rem; }
+  .t { font-size: var(--step-1); font-weight: 500; }
+  .terms-grid p { margin: 0; color: var(--ink-2); }
+  @media (max-width: 760px) { .terms-grid { grid-template-columns: 1fr; } }
+</style>

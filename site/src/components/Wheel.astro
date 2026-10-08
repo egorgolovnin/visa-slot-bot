@@ -1,0 +1,64 @@
+---
+/**
+ * The fortune wheel as an honest diagram: each sector's angle equals its real chance (app/promo.py WHEEL).
+ * It is a picture, not a game — spinning happens in the bot.
+ */
+import { WHEEL } from '../site';
+
+interface Props { size?: number; id?: string }
+const { size = 420, id = 'wheel' } = Astro.props;
+
+const R = 200;
+const C = 210; // centre, viewBox 420
+const COLORS: Record<number, string> = { 5: '#1f5fd1', 10: '#17803d', 15: '#1d2d44', 20: '#3c7be0', 30: '#0f5c2b', 100: '#f2b705' };
+const TEXT: Record<number, string> = { 100: '#0e1a2b' };
+
+// Start so that the pointer (top) sits inside the 10% sector, not on the jackpot.
+let angle = -70;
+const sectors = WHEEL.map((s) => {
+  const sweep = (s.chance / 100) * 360;
+  const a0 = angle, a1 = angle + sweep;
+  angle = a1;
+  const rad = (d: number) => ((d - 90) * Math.PI) / 180;
+  const p = (d: number, r = R) => [C + r * Math.cos(rad(d)), C + r * Math.sin(rad(d))].map((n) => n.toFixed(2)).join(' ');
+  const path = `M ${C} ${C} L ${p(a0)} A ${R} ${R} 0 ${sweep > 180 ? 1 : 0} 1 ${p(a1)} Z`;
+  const mid = (a0 + a1) / 2;
+  const inside = sweep >= 15;
+  const [lx, ly] = [C + R * 0.66 * Math.cos(rad(mid)), C + R * 0.66 * Math.sin(rad(mid))];
+  const [ox, oy] = [C + (R + 20) * Math.cos(rad(mid)), C + (R + 20) * Math.sin(rad(mid))];
+  const anchor = Math.abs(ox - C) < 20 ? 'middle' : ox < C ? 'end' : 'start';
+  const [ex, ey] = [C + (R + 16) * Math.cos(rad(mid)), C + (R + 14) * Math.sin(rad(mid))];
+  const [ix, iy] = [C + (R - 4) * Math.cos(rad(mid)), C + (R - 4) * Math.sin(rad(mid))];
+  return { ...s, path, mid, inside, lx, ly, ox, oy, anchor, ex, ey, ix, iy, color: COLORS[s.pct] ?? '#1d2d44', text: TEXT[s.pct] ?? '#ffffff' };
+});
+---
+<figure class="wheel" style={`--size:${size}px`} aria-labelledby={`${id}-cap`}>
+  <svg viewBox="-86 -30 592 490" role="img" aria-labelledby={`${id}-title ${id}-desc`}>
+    <title id={`${id}-title`}>Колесо скидок Easy Visa</title>
+    <desc id={`${id}-desc`}>{WHEEL.map((s) => `скидка ${s.pct}% — шанс ${s.chance}%`).join(', ')}.</desc>
+    <circle cx={C} cy={C} r={R + 10} fill="#0e1a2b" />
+    {sectors.map((s) => <path d={s.path} fill={s.color} stroke="#0e1a2b" stroke-width="1.5" />)}
+    {sectors.map((s) => s.inside ? (
+      <text x={s.lx} y={s.ly} text-anchor="middle" dominant-baseline="central" fill={s.text}
+        font-family="Unbounded, sans-serif" font-weight="700" font-size="26">{s.pct}%</text>
+    ) : (
+      <g class="out">
+        <line x1={s.ix} y1={s.iy} x2={s.ex} y2={s.ey} stroke="currentColor" stroke-width="2" />
+        <text x={s.ox} y={s.oy} text-anchor={s.anchor} dominant-baseline="central" fill="currentColor"
+          font-family="Unbounded, sans-serif" font-weight="700" font-size="17">{s.pct}%</text>
+      </g>
+    ))}
+    <circle cx={C} cy={C} r="46" fill="#f3f6fa" stroke="#0e1a2b" stroke-width="3" />
+    <text x={C} y={C - 6} text-anchor="middle" font-family="Golos Text, sans-serif" font-weight="600" font-size="14" fill="#0e1a2b">скидка</text>
+    <text x={C} y={C + 13} text-anchor="middle" font-family="Golos Text, sans-serif" font-size="12" fill="#44546b">на сервис</text>
+    <path d={`M ${C - 16} -14 L ${C + 16} -14 L ${C} 22 Z`} fill="#f2b705" stroke="#0e1a2b" stroke-width="3" stroke-linejoin="round" />
+  </svg>
+  <figcaption id={`${id}-cap`} class="small muted">
+    Размер сектора равен реальному шансу. Крутить колесо можно только в Telegram-боте, один раз на человека.
+  </figcaption>
+</figure>
+
+<style>
+  .wheel { margin: 0; width: min(100%, var(--size)); color: var(--ink); }
+  .wheel figcaption { margin-top: 0.8rem; text-align: center; }
+</style>

@@ -1,0 +1,73 @@
+---
+import Base from '../layouts/Base.astro';
+import Breadcrumbs from '../components/Breadcrumbs.astro';
+import Wheel from '../components/Wheel.astro';
+import BotButton from '../components/BotButton.astro';
+import Faq from '../components/Faq.astro';
+import { WHEEL, PRICE } from '../site';
+import { FAQ_WHEEL } from '../faq-data';
+
+const expected = WHEEL.reduce((s, w) => s + (w.pct * w.chance) / 100, 0);
+---
+<Base
+  title="Колесо скидок Easy Visa — шансы и условия"
+  description="Колесо скидок в Telegram-боте Easy Visa: скидка от 5% до 30% на запись на шенгенскую визу с Кипра, с шансом 1% запись бесплатно. Честные шансы и условия."
+>
+  <Breadcrumbs items={[{ name: 'Колесо скидок', href: '/koleso-fortuny/' }]} />
+  <section class="wrap section-tight wf">
+    <div>
+      <h1>Колесо скидок</h1>
+      <p class="lead">Покрутите колесо в нашем Telegram-боте один раз и получите скидку на сервис записи. Ниже реальные шансы каждого сектора, без звёздочек и мелкого шрифта.</p>
+      <BotButton action="wheel" place="wheel_top">Крутить колесо в Telegram</BotButton>
+      <p class="small muted note">Откроется бот @Easyvisaforyoubot, и колесо появится сразу. Если Telegram не установлен, откроется страница бота в браузере.</p>
+    </div>
+    <Wheel id="wheel-page" size={400} />
+  </section>
+
+  <section class="wrap section-tight prose">
+    <h2>Шансы</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th scope="col">Скидка на сервис</th><th scope="col">Шанс</th><th scope="col">Цена за одного человека</th></tr></thead>
+        <tbody>
+          {WHEEL.map((w) => (
+            <tr><td>{w.pct === 100 ? '100% — бесплатно' : `${w.pct}%`}</td><td>{w.chance}%</td><td>{Math.round(PRICE.person * (100 - w.pct)) / 100} €</td></tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <p>В среднем колесо даёт скидку около {expected.toFixed(1).replace('.', ',')}%. Сектор выбирается случайно с этими весами на сервере бота, а не на вашем телефоне.</p>
+
+    <h2>Как это работает</h2>
+    <ol>
+      <li>Откройте бота по кнопке на этой странице или командой /wheel в боте.</li>
+      <li>Нажмите «Крутить колесо». Попытка одна на аккаунт Telegram.</li>
+      <li>Бот покажет результат, и скидка сразу закрепится за вашим аккаунтом.</li>
+      <li>Оформите заявку через /order. Скидка применится автоматически, вы увидите итоговую цену в счёте после записи.</li>
+    </ol>
+
+    <h2>Условия</h2>
+    <ul>
+      <li>Скидка уменьшает только оплату нашего сервиса ({PRICE.person} € с человека или {PRICE.family} € за семью). Консульский сбор и сборы визового центра не меняются.</li>
+      <li>К заявке применяется одна скидка, самая большая из доступных. Скидки не суммируются.</li>
+      <li>Срока действия у скидки нет. Если заявку отменили до записи, скидка возвращается на аккаунт.</li>
+      <li>Скидку нельзя обменять на деньги или передать другому человеку.</li>
+    </ul>
+    <p>Полный текст условий — в <a href="/pravila-akciy/">правилах колеса и реферальной программы</a>.</p>
+  </section>
+
+  <section class="wrap section-tight"><Faq items={FAQ_WHEEL} /></section>
+
+  <section class="wrap section-tight end-cta">
+    <h2>Ещё одна скидка: приведите друга</h2>
+    <p class="muted">За каждого друга, который оплатит запись по вашей ссылке, — 50% на вашу следующую заявку. <a href="/referalnaya-programma/">Как это работает</a></p>
+    <BotButton action="wheel" place="wheel_bottom">Крутить колесо в Telegram</BotButton>
+  </section>
+</Base>
+<style>
+  .wf { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 3rem; align-items: center; }
+  .lead { font-size: var(--step-1); color: var(--ink-2); }
+  .note { margin-top: 0.8rem; max-width: 30rem; }
+  @media (max-width: 860px) { .wf { grid-template-columns: 1fr; } .wf :global(.wheel) { width: min(80vw, 340px); margin-inline: auto; } }
+  .end-cta { padding-bottom: 4rem; }
+</style>

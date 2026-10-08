@@ -1,0 +1,33 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import Breadcrumbs from '../../components/Breadcrumbs.astro';
+const all = (await getCollection('gid')).sort((a, b) => a.data.order - b.data.order);
+const list = {
+  '@context': 'https://schema.org', '@type': 'CollectionPage', name: 'Гид по шенгенской визе с Кипра',
+  hasPart: all.map((e) => ({ '@type': 'Article', headline: e.data.title, url: new URL(`/gid/${e.id}/`, Astro.site).href })),
+};
+---
+<Base title="Гид по шенгенской визе с Кипра — Easy Visa" description="Как получить шенгенскую визу, живя на Кипре: куда подавать, как записаться при отсутствии слотов, сколько стоит. Статьи со ссылками на правила ЕС и визовых центров." jsonLd={[list]}>
+  <Breadcrumbs items={[{ name: 'Гид', href: '/gid/' }]} />
+  <div class="wrap section-tight">
+    <h1>Гид по шенгенской визе с Кипра</h1>
+    <p class="lead muted">Практические ответы для тех, кто живёт на Кипре и подаёт на шенген. Каждое правило со ссылкой на первоисточник.</p>
+    <ul class="gl">
+      {all.map((e) => (
+        <li>
+          <a href={`/gid/${e.id}/`}><h2>{e.data.title}</h2></a>
+          <p class="muted">{e.data.description}</p>
+        </li>
+      ))}
+    </ul>
+  </div>
+</Base>
+<style>
+  .lead { font-size: var(--step-1); max-width: 40rem; }
+  .gl { list-style: none; padding: 0; margin: 2rem 0 0; max-width: 46rem; }
+  .gl li { border-top: 1px solid var(--line); padding: 1.4rem 0 0.4rem; }
+  .gl h2 { font-size: var(--step-2); margin-bottom: 0.4rem; }
+  .gl a { color: var(--ink); text-decoration: none; }
+  .gl a:hover h2 { color: var(--stamp); }
+</style>

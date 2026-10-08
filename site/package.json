@@ -1,0 +1,19 @@
+{
+  "name": "easyvisa-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build && node scripts/check-build.mjs",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "^3.2.1",
+    "@fontsource/golos-text": "^5.1.0",
+    "@fontsource/unbounded": "^5.1.0",
+    "astro": "^5.1.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.1"
+  }
+}

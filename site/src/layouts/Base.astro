@@ -1,0 +1,158 @@
+---
+import '../styles/global.css';
+import { BRAND, BOT_URL, botLink } from '../site';
+import { INDEXABLE, GA_ID, GSC_TOKEN } from '../lib/env';
+
+interface Props {
+  title: string;            // full <title>, 50–60 chars ideal
+  description: string;     // 120–160 chars
+  ogType?: 'website' | 'article';
+  noindex?: boolean;
+  jsonLd?: object[];
+  published?: string;
+  modified?: string;
+}
+const { title, description, ogType = 'website', noindex = false, jsonLd = [], published, modified } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const robots = !INDEXABLE || noindex ? 'noindex, nofollow' : 'index, follow, max-image-preview:large';
+const ogImage = new URL('/og.png', Astro.site).href;
+const path = Astro.url.pathname;
+
+const org = {
+  '@context': 'https://schema.org', '@type': 'Organization', '@id': new URL('/#org', Astro.site).href,
+  name: BRAND, url: new URL('/', Astro.site).href, logo: new URL('/icon-512.png', Astro.site).href,
+  sameAs: [BOT_URL],
+};
+const nav = [
+  { href: '/koleso-fortuny/', label: 'Колесо скидок' },
+  { href: '/referalnaya-programma/', label: 'Приведи друга' },
+  { href: '/strany/', label: 'Страны' },
+  { href: '/ceny/', label: 'Цены' },
+  { href: '/gid/', label: 'Гид' },
+];
+---
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title}</title>
+  <meta name="description" content={description} />
+  <link rel="canonical" href={canonical} />
+  <meta name="robots" content={robots} />
+  {GSC_TOKEN && <meta name="google-site-verification" content={GSC_TOKEN} />}
+  <meta name="theme-color" content="#0e1a2b" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icon-180.png" />
+  <link rel="preload" href="/fonts/unbounded-cyrillic-700-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="/fonts/golos-text-cyrillic-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+
+  <meta property="og:type" content={ogType} />
+  <meta property="og:site_name" content={BRAND} />
+  <meta property="og:locale" content="ru_RU" />
+  <meta property="og:title" content={title} />
+  <meta property="og:description" content={description} />
+  <meta property="og:url" content={canonical} />
+  <meta property="og:image" content={ogImage} />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  {published && <meta property="article:published_time" content={published} />}
+  {modified && <meta property="article:modified_time" content={modified} />}
+
+  <script type="application/ld+json" set:html={JSON.stringify(org)} />
+  {jsonLd.map((ld) => <script type="application/ld+json" set:html={JSON.stringify(ld)} />)}
+  {GA_ID && <meta name="ga-id" content={GA_ID} />}
+</head>
+<body>
+  <a class="skip" href="#main">К содержанию</a>
+  <header class="site-header">
+    <div class="wrap bar">
+      <a class="logo" href="/" aria-label={`${BRAND} — на главную`}>
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#0e1a2b"/><circle cx="16" cy="16" r="9" fill="none" stroke="#17803d" stroke-width="3"/><path d="m12 16.2 2.8 2.8 5.4-5.6" fill="none" stroke="#f2b705" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>{BRAND}</span>
+      </a>
+      <nav aria-label="Основное меню">
+        <ul class="nav">
+          {nav.map((n) => <li><a href={n.href} aria-current={path.startsWith(n.href) ? 'page' : undefined}>{n.label}</a></li>)}
+        </ul>
+      </nav>
+      <a class="btn btn-primary header-cta" href={botLink('order', 'header')} rel="noopener" target="_blank" data-bot="order" data-place="header">Записаться</a>
+    </div>
+  </header>
+
+  <main id="main">
+    <slot />
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap foot">
+      <div>
+        <p class="foot-brand">{BRAND}</p>
+        <p class="small">Помогаем жителям Кипра записаться на подачу документов на шенгенскую визу. Мы частный сервис, не связаны с посольствами и визовыми центрами и не влияем на решение по визе.</p>
+      </div>
+      <nav aria-label="Разделы сайта">
+        <ul class="foot-links">
+          <li><a href="/gid/">Гид по шенгену с Кипра</a></li>
+          <li><a href="/strany/">Куда и как подавать</a></li>
+          <li><a href="/ceny/">Цены</a></li>
+          <li><a href="/faq/">Вопросы и ответы</a></li>
+          <li><a href="/o-proekte/">О проекте</a></li>
+          <li><a href="/kontakty/">Контакты</a></li>
+        </ul>
+      </nav>
+      <nav aria-label="Документы">
+        <ul class="foot-links">
+          <li><a href="/pravila-akciy/">Правила колеса и реферальной программы</a></li>
+          <li><a href="/usloviya/">Условия сервиса</a></li>
+          <li><a href="/konfidencialnost/">Конфиденциальность</a></li>
+          {GA_ID && <li><button type="button" class="linklike" data-consent-reset>Настройки cookie</button></li>}
+        </ul>
+      </nav>
+    </div>
+  </footer>
+
+  {GA_ID && (
+    <div class="consent" role="region" aria-label="Cookie" hidden data-consent>
+      <p class="small">Используем Google Analytics, чтобы понять, какие страницы полезны. Cookie аналитики ставим только с вашего согласия. <a href="/konfidencialnost/">Подробнее</a></p>
+      <div class="consent-btns">
+        <button type="button" class="btn btn-primary" data-consent-yes>Разрешить</button>
+        <button type="button" class="btn btn-ghost" data-consent-no>Отказаться</button>
+      </div>
+    </div>
+  )}
+
+  <script>
+    import { initTracking } from '../lib/tracking';
+    initTracking();
+  </script>
+</body>
+</html>
+
+<style>
+  .site-header { background: var(--paper); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20; }
+  .bar { display: flex; align-items: center; gap: 1.5rem; min-height: 64px; }
+  .logo { display: inline-flex; align-items: center; gap: 0.55rem; text-decoration: none; color: var(--ink); font: 700 1.05rem/1 var(--display); }
+  .logo svg { width: 32px; height: 32px; }
+  .nav { display: flex; gap: 1.3rem; list-style: none; margin: 0; padding: 0; }
+  .nav a { color: var(--ink); text-decoration: none; font-weight: 500; font-size: 0.97rem; }
+  .nav a:hover, .nav a[aria-current] { color: var(--stamp); }
+  .header-cta { margin-left: auto; min-height: 42px; padding: 0.5em 1.1em; font-size: 0.95rem; }
+  @media (max-width: 900px) {
+    .site-header { position: static; }
+    .bar { flex-wrap: wrap; gap: 0 1rem; padding-block: 0.6rem 0; }
+    nav[aria-label='Основное меню'] { order: 3; width: 100%; overflow-x: auto; }
+    .nav { gap: 1.1rem; padding-block: 0.5rem 0.7rem; white-space: nowrap; }
+  }
+  .site-footer { background: var(--ink); color: #c9d3e0; margin-top: 2rem; }
+  .foot { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 2rem; padding-block: 3rem; }
+  .foot-brand { font: 700 1.1rem var(--display); color: #fff; }
+  .foot-links { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.55rem; }
+  .site-footer a, .linklike { color: #c9d3e0; font: inherit; }
+  .site-footer a:hover, .linklike:hover { color: #fff; }
+  .linklike { background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
+  @media (max-width: 760px) { .foot { grid-template-columns: 1fr; } }
+  .consent { position: fixed; inset: auto 1rem 1rem 1rem; max-width: 34rem; margin-left: auto; background: #fff; border: 1px solid var(--line); border-radius: var(--r); padding: 1rem 1.2rem; box-shadow: 0 12px 40px rgba(14, 26, 43, 0.18); z-index: 50; }
+  .consent-btns { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+  .consent .btn { min-height: 44px; padding: 0.5em 1.2em; font-size: 0.95rem; }
+</style>
