@@ -79,36 +79,52 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
                  "input[name=email], input[autocomplete=username], input[placeholder*=mail i]")
         PWD = ("input#password, input[type=password], input[formcontrolname=password], "
                "input[name=password], input[autocomplete=current-password]")
+        btn = ("button[type=submit], button:has-text('Sign In'), button:has-text('Sign in'), "
+               "button:has-text('Login'), button:has-text('Log in'), button:has-text('Submit')")
         try:
             await asyncio.sleep(6)
-            try:
-                desc = await page.eval_on_selector_all(
-                    "input, button",
-                    "els => els.map(e => e.tagName+':'+(e.id||'')+'|'+(e.name||'')+'|'+(e.type||'')+"
-                    "'|'+(e.getAttribute('formcontrolname')||'')+'|'+(e.placeholder||'')+'|'+(e.textContent||'').trim().slice(0,20))")
-                log.info("vfs_browser FIELDS: %s", desc)
-            except Exception as e:
-                log.info("vfs_browser: field dump failed: %s", e)
-            for attempt in range(4):
-                try:
-                    await page.wait_for_selector(EMAIL, timeout=20000, state="visible")
+            target = None  # the page or frame that actually holds the email field
+            for attempt in range(5):
+                for fr in [page] + page.frames:
+                    try:
+                        el = await fr.query_selector(EMAIL)
+                        if el:
+                            target = fr
+                            break
+                    except Exception:
+                        continue
+                if target:
                     break
-                except Exception:
-                    await _pass_turnstile(page)
-                    await asyncio.sleep(3)
-                    log.info("vfs_browser: waiting for form, attempt %d, inputs on page=%d",
-                             attempt, len(await page.query_selector_all("input")))
-            await page.fill(EMAIL, email, timeout=15000)
-            await page.fill(PWD, password, timeout=15000)
-            log.info("vfs_browser: filled form, solving turnstile before submit")
+                # log what each frame has, to diagnose
+                for fr in page.frames:
+                    try:
+                        n = len(await fr.query_selector_all("input"))
+                        if n:
+                            log.info("vfs_browser: frame %s has %d inputs", (fr.url or "")[:60], n)
+                    except Exception:
+                        pass
+                await _pass_turnstile(page)
+                await asyncio.sleep(3)
+            if not target:
+                raise RuntimeError("email field not found in any frame")
+            await target.fill(EMAIL, email, timeout=15000)
+            await target.fill(PWD, password, timeout=15000)
+            log.info("vfs_browser: filled form in frame %s", (target.url or "main")[:60])
             await _pass_turnstile(page)
             await asyncio.sleep(1)
-            btn = ("button[type=submit], button:has-text('Sign In'), button:has-text('Sign in'), "
-                   "button:has-text('Login'), button:has-text('Log in'), button:has-text('Submit')")
-            await page.click(btn, timeout=15000)
+            try:
+                await target.click(btn, timeout=10000)
+            except Exception:
+                await page.click(btn, timeout=10000)
             log.info("vfs_browser: submitted")
         except Exception as e:
-            log.warning("form fill failed: %s (inputs=%d)", e, len(await page.query_selector_all("input")))
+            frames_info = []
+            for fr in page.frames:
+                try:
+                    frames_info.append(f"{(fr.url or '')[:40]}:{len(await fr.query_selector_all('input'))}")
+                except Exception:
+                    pass
+            log.warning("form fill failed: %s | frames=%s", e, frames_info)
         # wait for the token to arrive
         for _ in range(timeout):
             if token:
