@@ -162,20 +162,43 @@ class VfsSession:
             raise LoginError(f"unexpected login response: {text[:150]}")
 
 
-async def login_austria(mailbox_wait, proxy: str | None = None) -> VfsSession | None:
-    """Austria: no captcha. Returns a live session or None. `mailbox_wait` reads an OTP if VFS asks for one."""
+async def login_session(country: str, mission: str, proxy: str | None, mailbox_wait=None) -> VfsSession | None:
+    """Get a live VFS session: browser login (Camoufox) first, HTTP as fallback."""
     accs = accounts()
     if not accs:
         log.info("no VFS_ACCOUNTS configured")
         return None
     email, pwd = accs[0]
-    sess = VfsSession("cyp", "aut", proxy)
+    # 1) browser login — the only method that reliably passes VFS anti-bot
+    try:
+        from . import vfs_browser
+        if vfs_browser.available():
+            data = await vfs_browser.login(country, mission, email, pwd, proxy=proxy)
+            if data and data.get("token"):
+                sess = VfsSession(country, mission, proxy)
+                import time
+                sess.token, sess.obtained, sess.cookies = data["token"], time.time(), data["cookies"]
+                return sess
+            log.info("browser login returned no token, trying HTTP")
+    except Exception as e:
+        log.warning("browser login failed: %s", e)
+    # 2) HTTP fallback
+    sess = VfsSession(country, mission, proxy)
     try:
         await sess.login(email, pwd)
     except OtpRequired:
         since = datetime.now(timezone.utc) - timedelta(minutes=2)
-        code = await mailbox_wait(sender_like="vfs", pattern=r"\b(\d{4,8})\b", since=since, timeout=180)
+        code = await (mailbox_wait(sender_like="vfs", pattern=r"\b(\d{4,8})\b", since=since, timeout=180)
+                      if mailbox_wait else _noop())
         if not code:
             raise LoginError("OTP did not arrive by email")
         await sess.login(email, pwd, otp=code)
     return sess if sess.alive else None
+
+
+async def _noop():
+    return None
+
+
+async def login_austria(mailbox_wait, proxy: str | None = None) -> VfsSession | None:
+    return await login_session("cyp", "aut", proxy, mailbox_wait)

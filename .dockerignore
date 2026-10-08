@@ -5,3 +5,4 @@ tests
 *.md
 .env
 deploy.env.template
+state/
