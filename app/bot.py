@@ -713,13 +713,19 @@ async def health(message: Message, db: Database, poller: Poller, settings: Setti
 async def vfslogin(message: Message, command: CommandObject, poller: Poller, settings: Settings) -> None:
     if not await admin_only(message, settings):
         return
-    from . import mailbox, vfs_auth, vfs_browser
+    from . import capsolver, mailbox, vfs_auth, vfs_browser
     if not vfs_auth.accounts():
         await message.answer("Нет VFS_ACCOUNTS в переменных.")
         return
     mission = (command.args or "aut").strip().lower()
-    await message.answer(f"Логинюсь в VFS ({mission}) через Camoufox "
-                         f"(браузер {'готов' if vfs_browser.available() else 'НЕ установлен'})… до минуты.")
+    if capsolver.enabled():
+        bal = await capsolver.balance()
+        sk = await capsolver.sitekey("cyp", mission, poller.s.proxy_url)
+        method = (f"Capsolver (баланс ${bal if bal is not None else '?'}, "
+                  f"sitekey {'найден' if sk else 'НЕ найден'})")
+    else:
+        method = f"Camoufox (браузер {'готов' if vfs_browser.available() else 'НЕ установлен'})"
+    await message.answer(f"Логинюсь в VFS ({mission}) — {method}… до минуты.")
 
     async def wait(**kw):
         return await mailbox.wait_for(**kw) if mailbox.enabled() else None

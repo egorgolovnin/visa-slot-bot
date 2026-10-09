@@ -58,6 +58,25 @@ def drop(country: str, mission: str) -> None:
     _cache.pop(f"{country}/{mission}", None)
 
 
+async def rendered_html(country: str, mission: str, proxy: str | None = None) -> str | None:
+    """Full JS-rendered HTML of the VFS login page via FlareSolverr (used to discover the Turnstile sitekey)."""
+    base = os.getenv("FLARESOLVERR_URL", "").rstrip("/")
+    if not base:
+        return None
+    url = f"https://visa.vfsglobal.com/{country}/en/{mission}/login"
+    payload = {"cmd": "request.get", "url": url, "maxTimeout": 60000}
+    if (proxy or os.getenv("PROXY_URL")):
+        payload["proxy"] = {"url": proxy or os.getenv("PROXY_URL")}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=90)) as s:
+            async with s.post(f"{base}/v1", json=payload) as r:
+                data = await r.json(content_type=None)
+        return ((data or {}).get("solution") or {}).get("response")
+    except Exception as e:
+        log.warning("rendered_html failed: %s", e)
+        return None
+
+
 async def browser_post(url: str, post_data: str, proxy: str | None = None) -> tuple[int, str, str]:
     """POST through FlareSolverr's real browser. Returns (status, body, user_agent). post_data is urlencoded."""
     base = os.getenv("FLARESOLVERR_URL", "").rstrip("/")

@@ -169,6 +169,30 @@ async def login_session(country: str, mission: str, proxy: str | None, mailbox_w
         log.info("no VFS_ACCOUNTS configured")
         return None
     email, pwd = accs[0]
+    # 0) Capsolver — solve the login Turnstile and use the normal HTTP login (most reliable).
+    from . import capsolver
+    if capsolver.enabled():
+        try:
+            sk = await capsolver.sitekey(country, mission, proxy)
+            token = await capsolver.solve_turnstile(
+                f"https://visa.vfsglobal.com/{country}/en/{mission}/login", sk, proxy=proxy) if sk else None
+            if token:
+                sess = VfsSession(country, mission, proxy)
+                try:
+                    await sess.login(email, pwd, turnstile=token)
+                except OtpRequired:
+                    since = datetime.now(timezone.utc) - timedelta(minutes=2)
+                    code = await (mailbox_wait(sender_like="vfs", pattern=r"\b(\d{4,8})\b", since=since, timeout=180)
+                                  if mailbox_wait else _noop())
+                    if not code:
+                        raise LoginError("OTP did not arrive by email")
+                    await sess.login(email, pwd, turnstile=token, otp=code)
+                if sess.alive:
+                    return sess
+            else:
+                log.warning("capsolver: no token/sitekey, falling back")
+        except Exception as e:
+            log.warning("capsolver login failed: %s", e)
     # 1) browser login — the only method that reliably passes VFS anti-bot
     try:
         from . import vfs_browser
