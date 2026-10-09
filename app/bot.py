@@ -757,17 +757,18 @@ async def capsolver_diag(message: Message, command: CommandObject, poller: Polle
 
 
 @router.message(Command("slotprobe"))
-async def slotprobe(message: Message, poller: Poller, settings: Settings) -> None:
+async def slotprobe(message: Message, command: CommandObject, poller: Poller, settings: Settings) -> None:
     if not await admin_only(message, settings):
         return
-    await message.answer("Логинюсь в VFS и смотрю, что отдают эндпоинты слотов из аккаунта…")
+    mission = (command.args or "hun").strip().lower()
+    await message.answer(f"Логинюсь в VFS ({mission}) и смотрю, что отдают эндпоинты записи из аккаунта…")
     from . import mailbox, vfs_auth
     from .slot_probe import probe_account
 
     async def wait(**kw):
         return await mailbox.wait_for(**kw) if mailbox.enabled() else None
     try:
-        sess = await vfs_auth.login_austria(wait, poller.s.proxy_url)
+        sess = await vfs_auth.login_session("cyp", mission, poller.s.proxy_url, wait)
         if not (sess and sess.alive):
             await message.answer("Не вошёл — сначала нужен успешный /vfslogin.")
             return
