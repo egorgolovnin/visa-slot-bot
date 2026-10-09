@@ -731,7 +731,7 @@ async def vfslogin(message: Message, command: CommandObject, poller: Poller, set
     async def wait(**kw):
         return await mailbox.wait_for(**kw) if mailbox.enabled() else None
     try:
-        sess = await vfs_auth.login_session("cyp", mission, poller.s.proxy_url, wait)
+        sess = await vfs_auth.live_session("cyp", mission, poller.s.proxy_url, wait)
         from .vfs_browser import STEPS
         trace = "\n".join(f"• {x}" for x in STEPS) if STEPS else "нет шагов"
         if sess and sess.alive:
@@ -768,7 +768,7 @@ async def slotprobe(message: Message, command: CommandObject, poller: Poller, se
     async def wait(**kw):
         return await mailbox.wait_for(**kw) if mailbox.enabled() else None
     try:
-        sess = await vfs_auth.login_session("cyp", mission, poller.s.proxy_url, wait)
+        sess = await vfs_auth.live_session("cyp", mission, poller.s.proxy_url, wait)
         if not (sess and sess.alive):
             await message.answer("Не вошёл — сначала нужен успешный /vfslogin.")
             return

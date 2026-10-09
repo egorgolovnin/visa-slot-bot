@@ -162,6 +162,24 @@ class VfsSession:
             raise LoginError(f"unexpected login response: {text[:150]}")
 
 
+# Cache the last good session per mission so we log in rarely (token ~5.5h). Repeated logins
+# trip VFS anti-abuse (403102) and burn OTPs, so probing/booking must REUSE this, not re-login.
+_SESSIONS: dict[str, VfsSession] = {}
+
+
+async def live_session(country: str, mission: str, proxy: str | None,
+                       mailbox_wait=None, force: bool = False) -> VfsSession | None:
+    """Return a cached live session if the token is still valid, else log in once and cache it."""
+    key = f"{country}/{mission}"
+    cached = _SESSIONS.get(key)
+    if cached and cached.alive and not force:
+        return cached
+    sess = await login_session(country, mission, proxy, mailbox_wait)
+    if sess and sess.alive:
+        _SESSIONS[key] = sess
+    return sess
+
+
 async def login_session(country: str, mission: str, proxy: str | None, mailbox_wait=None) -> VfsSession | None:
     """Get a live VFS session: browser login (Camoufox) first, HTTP as fallback."""
     accs = accounts()
