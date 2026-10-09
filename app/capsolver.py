@@ -99,6 +99,8 @@ async def solve_turnstile(url: str, site_key: str, action: str | None = None,
     client_key = os.getenv("CAPSOLVER_KEY")
     if not client_key or not site_key:
         return None
+    action = action or os.getenv("VFS_TURNSTILE_ACTION") or None
+    cdata = cdata or os.getenv("VFS_TURNSTILE_CDATA") or None
     task = {"type": "AntiTurnstileTaskProxyLess", "websiteURL": url, "websiteKey": site_key}
     meta = {}
     if action:
@@ -109,7 +111,7 @@ async def solve_turnstile(url: str, site_key: str, action: str | None = None,
         task["metadata"] = meta
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout + 30)) as s:
         async with s.post(f"{API}/createTask", json={"clientKey": client_key, "task": task}) as r:
-            j = await r.json()
+            j = await r.json(content_type=None)
         if j.get("errorId"):
             log.warning("capsolver createTask error: %s %s", j.get("errorCode"), j.get("errorDescription"))
             return None
@@ -121,7 +123,7 @@ async def solve_turnstile(url: str, site_key: str, action: str | None = None,
             await asyncio.sleep(3)
             async with s.post(f"{API}/getTaskResult",
                               json={"clientKey": client_key, "taskId": task_id}) as r:
-                j = await r.json()
+                j = await r.json(content_type=None)
             if j.get("errorId"):
                 log.warning("capsolver getTaskResult error: %s %s", j.get("errorCode"), j.get("errorDescription"))
                 return None
@@ -161,7 +163,7 @@ async def balance() -> float | None:
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
             async with s.post(f"{API}/getBalance", json={"clientKey": client_key}) as r:
-                j = await r.json()
+                j = await r.json(content_type=None)
         return float(j.get("balance")) if j.get("balance") is not None else None
     except Exception as e:
         log.warning("capsolver balance check failed: %s", e)
