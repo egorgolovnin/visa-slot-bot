@@ -30,24 +30,57 @@ def _login_url(country: str, mission: str) -> str:
     return f"https://visa.vfsglobal.com/{country}/en/{mission}/login"
 
 
+# Turnstile sitekeys always start with this prefix — a very reliable anchor in HTML or JS bundles.
+_SK_RE = re.compile(r'0x4AAAAAAA[A-Za-z0-9_\-]{6,}')
+
+
+async def _fetch_text(url: str, proxy: str | None) -> str | None:
+    """GET a static asset (JS bundle) through the proxy with a browser-ish TLS profile."""
+    from curl_cffi.requests import AsyncSession
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    try:
+        async with AsyncSession(impersonate="chrome124", proxies=proxies, timeout=40) as s:
+            r = await s.get(url, headers={"accept": "*/*", "referer": "https://visa.vfsglobal.com/"})
+            return r.text or ""
+    except Exception as e:
+        log.info("fetch bundle failed %s: %s", url, e)
+        return None
+
+
 async def sitekey(country: str, mission: str, proxy: str | None = None) -> str | None:
-    """Turnstile sitekey for the VFS login page. Env override → cache → discover via FlareSolverr HTML."""
+    """Turnstile sitekey for the VFS login page. Env override → cache → rendered HTML → JS bundles."""
     env = os.getenv("VFS_TURNSTILE_SITEKEY")
     if env:
         return env.strip()
     key = f"{country}/{mission}"
     if key in _sitekey_cache:
         return _sitekey_cache[key]
-    # discover from the rendered login page (FlareSolverr runs JS, so the widget is present)
     from . import cf
     html = await cf.rendered_html(country, mission, proxy=proxy) if hasattr(cf, "rendered_html") else None
+
+    def _remember(sk: str) -> str:
+        _sitekey_cache[key] = sk
+        log.info("discovered VFS turnstile sitekey: %s", sk)
+        return sk
+
     if html:
-        m = re.search(r'data-sitekey=["\']([0-9a-zA-Z_\-]{10,})["\']', html) \
+        m = _SK_RE.search(html) \
+            or re.search(r'data-sitekey=["\']([0-9a-zA-Z_\-]{10,})["\']', html) \
             or re.search(r'sitekey["\']?\s*[:=]\s*["\']([0-9a-zA-Z_\-]{10,})["\']', html)
         if m:
-            _sitekey_cache[key] = m.group(1)
-            log.info("discovered VFS turnstile sitekey: %s", m.group(1))
-            return m.group(1)
+            return _remember(m.group(0) if m.re is _SK_RE else m.group(1))
+        # not in the DOM — scan the Angular JS bundles the page loads
+        base = "https://visa.vfsglobal.com"
+        srcs = re.findall(r'<script[^>]+src=["\']([^"\']+\.js)["\']', html)
+        # prefer main/runtime bundles, cap how many we fetch
+        srcs = sorted(set(srcs), key=lambda s: (0 if re.search(r'main|runtime|scripts', s) else 1))[:8]
+        for src in srcs:
+            url = src if src.startswith("http") else base + ("" if src.startswith("/") else "/") + src.lstrip("/")
+            js = await _fetch_text(url, proxy)
+            if js:
+                m = _SK_RE.search(js)
+                if m:
+                    return _remember(m.group(0))
     log.warning("turnstile sitekey not found — set VFS_TURNSTILE_SITEKEY in env (grab it from the login page DevTools)")
     return None
 
@@ -90,6 +123,26 @@ async def solve_turnstile(url: str, site_key: str, action: str | None = None,
                 return token
         log.warning("capsolver timed out after %ss", timeout)
         return None
+
+
+async def diagnose(country: str, mission: str, proxy: str | None = None) -> str:
+    """Human-readable check: key present? API reachable? balance? sitekey found?"""
+    lines = [f"CAPSOLVER_KEY: {'задан' if enabled() else 'НЕ задан'}"]
+    if enabled():
+        client_key = os.getenv("CAPSOLVER_KEY")
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
+                async with s.post(f"{API}/getBalance", json={"clientKey": client_key}) as r:
+                    j = await r.json(content_type=None)
+            if j.get("errorId"):
+                lines.append(f"API: ошибка {j.get('errorCode')} — {j.get('errorDescription')}")
+            else:
+                lines.append(f"API: ok, баланс ${j.get('balance')}")
+        except Exception as e:
+            lines.append(f"API: НЕ достучался ({str(e)[:120]})")
+    sk = await sitekey(country, mission, proxy)
+    lines.append(f"sitekey: {sk or 'НЕ найден'}")
+    return "\n".join(lines)
 
 
 async def balance() -> float | None:

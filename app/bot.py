@@ -50,6 +50,7 @@ ADMIN_COMMANDS = [
     ("health", "Состояние проверок"),
     ("discover", "Переразведка стран VFS"),
     ("vfslogin", "Проверить автовход в VFS"),
+    ("capsolver", "Проверить Capsolver: баланс+sitekey"),
     ("slotprobe", "Разведка эндпоинтов слотов"),
     ("rkform", "Германия: показать форму записи"),
 ]
@@ -739,6 +740,20 @@ async def vfslogin(message: Message, command: CommandObject, poller: Poller, set
             await message.answer("⚠️ Токен не получен. Шаги:\n" + trace)
     except Exception as e:
         await message.answer(f"⚠️ Вход не прошёл: <code>{html.escape(str(e))[:400]}</code>")
+
+
+@router.message(Command("capsolver"))
+async def capsolver_diag(message: Message, command: CommandObject, poller: Poller, settings: Settings) -> None:
+    if not await admin_only(message, settings):
+        return
+    from . import capsolver
+    mission = (command.args or "aut").strip().lower()
+    await message.answer("Проверяю Capsolver…")
+    try:
+        report = await capsolver.diagnose("cyp", mission, poller.s.proxy_url)
+    except Exception as e:
+        report = f"ошибка диагностики: {html.escape(str(e))[:300]}"
+    await message.answer(f"<b>Capsolver ({mission})</b>\n{report}")
 
 
 @router.message(Command("slotprobe"))
