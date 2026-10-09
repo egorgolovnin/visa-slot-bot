@@ -17,6 +17,8 @@ class Settings:
     admin_ids: frozenset[int]
     admin_chat_id: int | None  # Telegram group chat for admin alerts/analytics/backups; falls back to admin_ids
     channel: str | None        # public channel for announcements, e.g. @bestvisaeurope (bot must be its admin)
+    manager: str | None        # human manager contact shown to clients, e.g. @bestvisamanager
+    manager_name: str          # manager display name, e.g. Алена
     proxy_url: str | None
     poll_interval: int          # seconds between full cycles
     missions: tuple[str, ...]   # empty = auto-discover which countries VFS serves in Cyprus
@@ -36,6 +38,13 @@ class Settings:
             return (self.admin_chat_id,)
         return tuple(sorted(self.admin_ids))
 
+    @property
+    def manager_contact(self) -> str:
+        """Client-facing manager contact line, or '' if not configured."""
+        if not self.manager:
+            return ""
+        return f"👩‍💼 Ваш менеджер {self.manager_name} — {self.manager}"
+
 
 def load() -> Settings:
     missing = [k for k in ("BOT_TOKEN", "DATABASE_URL", "ADMIN_IDS") if not os.getenv(k)]
@@ -47,6 +56,8 @@ def load() -> Settings:
         admin_ids=_ids(os.environ["ADMIN_IDS"]),
         admin_chat_id=(int(os.environ["ADMIN_CHAT_ID"]) if os.getenv("ADMIN_CHAT_ID") else None),
         channel=(os.getenv("CHANNEL", "").strip() or None),
+        manager=(os.getenv("MANAGER", "").strip() or None),
+        manager_name=(os.getenv("MANAGER_NAME", "Алена").strip()),
         proxy_url=os.getenv("PROXY_URL") or None,
         poll_interval=int(os.getenv("POLL_INTERVAL_SEC", "600")),
         missions=_list(os.getenv("MISSIONS", "")),

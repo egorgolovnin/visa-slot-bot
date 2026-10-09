@@ -941,7 +941,8 @@ async def _order_confirm(call: CallbackQuery, state: FSMContext, db: Database, s
     else:
         await call.message.edit_text(
             f"✅ Заявка <b>#{order_id}</b> принята: {html.escape(data['mission_name'])}.\n"
-            "Как только поймаем слот и запишем тебя — пришлю подтверждение и детали. Статус — /myorders")
+            "Как только поймаем слот и запишем тебя — пришлю подтверждение и детали. Статус — /myorders"
+            + (f"\n\n{settings.manager_contact}" if settings.manager_contact else ""))
         header = "🆕 Новая заявка" + (f" на {n} чел." if n > 1 else "")
     from .checks import duplicate_passports
     dups = await duplicate_passports(db, people, call.from_user.id, exclude_order=order_id)

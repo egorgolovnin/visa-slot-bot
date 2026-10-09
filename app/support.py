@@ -60,7 +60,10 @@ async def support_cmd(message: Message, state: FSMContext, settings: Settings) -
         await message.answer("Ты админ 🙂 Вопросы клиентов приходят тебе сюда. Ответить — «Ответить» под вопросом "
                              "или свайп-ответ (reply) на сообщение клиента.")
         return
-    await ask_question(message, state)
+    prompt = "Напиши вопрос одним сообщением — можно с фото или файлом. Ответим здесь, в боте."
+    if settings.manager_contact:
+        prompt += f"\n\n{settings.manager_contact} — можно написать напрямую."
+    await ask_question(message, state, prompt=prompt)
 
 
 @router.callback_query(F.data == "sup:cancel")

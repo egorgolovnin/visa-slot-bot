@@ -103,10 +103,14 @@ def price_str(settings: Settings) -> str:
 
 
 def help_text(settings: Settings, admin: bool = False) -> str:
-    channel = (f"\n\n📣 Свежие слоты и кейсы — в нашем канале {settings.channel}"
-               if settings.channel and not admin else "")
+    extra = ""
+    if not admin:
+        if settings.manager_contact:
+            extra += f"\n\n{settings.manager_contact} — вопросы и помощь с заявкой."
+        if settings.channel:
+            extra += f"\n📣 Свежие слоты и кейсы — в нашем канале {settings.channel}"
     return (HELP.replace("{price}", price_str(settings)).replace("{docs_price}", f"{settings.docs_price:.0f}")
-            .replace("{family}", f"{settings.family_price:.0f}") + channel + (ADMIN_HELP if admin else ""))
+            .replace("{family}", f"{settings.family_price:.0f}") + extra + (ADMIN_HELP if admin else ""))
 
 
 FAQ = (

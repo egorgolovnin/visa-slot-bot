@@ -196,7 +196,8 @@ async def handle_submission(bot: Bot, db, settings, payload: dict) -> dict:
     await bot.send_message(uid,
         f"✅ Заявка из формы принята: <b>#{oid}</b>, {html.escape(data['mission_name'])}{ppl}."
         + (f"\n\n⚠️ Обрати внимание:\n" + "\n".join(f"• {html.escape(w)}" for w in warns) if warns else "")
-        + "\n\nСтатус — /myorders. Вопросы — /support")
+        + "\n\nСтатус — /myorders. Вопросы — /support"
+        + (f"\n{settings.manager_contact}" if settings.manager_contact else ""))
     from .requirements_by_country import requirements
     if requirements(data["mission"]).passport_scan:
         await bot.send_message(uid, "📷 Для этой страны визовый центр требует фото разворота паспорта — "
