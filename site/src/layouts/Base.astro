@@ -41,11 +41,19 @@ const nav = [
   <link rel="canonical" href={canonical} />
   <meta name="robots" content={robots} />
   {GSC_TOKEN && <meta name="google-site-verification" content={GSC_TOKEN} />}
-  <meta name="theme-color" content="#0e1a2b" />
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#1b1d1f" media="(prefers-color-scheme: dark)" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
-  <link rel="preload" href="/fonts/unbounded-cyrillic-700-normal.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="preload" href="/fonts/golos-text-cyrillic-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="/fonts/manrope-cyrillic-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="/fonts/manrope-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <script is:inline>
+    // Apply the saved theme before first paint to avoid a flash.
+    try {
+      var t = localStorage.getItem('theme');
+      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
 
   <meta property="og:type" content={ogType} />
   <meta property="og:site_name" content={BRAND} />
@@ -77,7 +85,13 @@ const nav = [
           {nav.map((n) => <li><a href={n.href} aria-current={path.startsWith(n.href) ? 'page' : undefined}>{n.label}</a></li>)}
         </ul>
       </nav>
-      <a class="btn btn-primary header-cta" href={botLink('order', 'header')} rel="noopener" target="_blank" data-bot="order" data-place="header">Записаться</a>
+      <div class="header-actions">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Переключить тему" title="Светлая / тёмная тема">
+          <svg class="t-sun" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 1.5v2.5M12 20v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M1.5 12h2.5M20 12h2.5M4.2 19.8l1.8-1.8M18 6l1.8-1.8"/></svg>
+          <svg class="t-moon" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>
+        </button>
+        <a class="btn btn-primary header-cta" href={botLink('order', 'header')} rel="noopener" target="_blank" data-bot="order" data-place="header">Записаться</a>
+      </div>
     </div>
   </header>
 
@@ -126,33 +140,82 @@ const nav = [
     import { initTracking } from '../lib/tracking';
     initTracking();
   </script>
+  <script is:inline>
+    (function () {
+      var root = document.documentElement;
+      // Theme toggle — persists the explicit choice; otherwise the OS preference wins.
+      var btn = document.querySelector('[data-theme-toggle]');
+      if (btn) btn.addEventListener('click', function () {
+        var dark = root.dataset.theme
+          ? root.dataset.theme === 'dark'
+          : matchMedia('(prefers-color-scheme: dark)').matches;
+        var next = dark ? 'light' : 'dark';
+        root.dataset.theme = next;
+        try { localStorage.setItem('theme', next); } catch (e) {}
+      });
+
+      // Header gains a solid background once the page is scrolled.
+      var header = document.querySelector('.site-header');
+      if (header) {
+        var onScroll = function () { header.classList.toggle('scrolled', window.scrollY > 8); };
+        onScroll();
+        addEventListener('scroll', onScroll, { passive: true });
+      }
+
+      // Restrained scroll-reveal — choreographed fade-up, skipped under reduced-motion.
+      var items = document.querySelectorAll('[data-reveal]');
+      if (!items.length) return;
+      if (matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) {
+        items.forEach(function (el) { el.classList.add('is-in'); });
+        return;
+      }
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { e.target.classList.add('is-in'); io.unobserve(e.target); }
+        });
+      }, { rootMargin: '0px 0px -10% 0px', threshold: 0.12 });
+      items.forEach(function (el) { io.observe(el); });
+    })();
+  </script>
 </body>
 </html>
 
 <style>
-  .site-header { background: var(--paper); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20; }
-  .bar { display: flex; align-items: center; gap: 1.5rem; min-height: 64px; }
-  .logo { display: inline-flex; align-items: center; gap: 0.55rem; text-decoration: none; color: var(--ink); font: 700 1.05rem/1 var(--display); }
-  .logo svg { width: 32px; height: 32px; }
-  .nav { display: flex; gap: 1.3rem; list-style: none; margin: 0; padding: 0; }
-  .nav a { color: var(--ink); text-decoration: none; font-weight: 500; font-size: 0.97rem; }
-  .nav a:hover, .nav a[aria-current] { color: var(--stamp); }
-  .header-cta { margin-left: auto; min-height: 42px; padding: 0.5em 1.1em; font-size: 0.95rem; }
+  .site-header { position: sticky; top: 0; z-index: 20; background: transparent; transition: background-color 0.3s var(--ease), border-color 0.3s var(--ease), backdrop-filter 0.3s var(--ease); border-bottom: 1px solid transparent; }
+  .site-header.scrolled { background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: saturate(1.4) blur(14px); border-bottom-color: var(--line); }
+  .bar { display: flex; align-items: center; gap: 1.5rem; min-height: 68px; }
+  .logo { display: inline-flex; align-items: center; gap: 0.55rem; text-decoration: none; color: var(--ink); font: 700 1.1rem/1 var(--display); letter-spacing: -0.02em; }
+  .logo svg { width: 30px; height: 30px; }
+  .nav { display: flex; gap: 1.6rem; list-style: none; margin: 0 auto 0 1.5rem; padding: 0; }
+  .nav a { color: var(--ink); text-decoration: none; font-weight: 550; font-size: 0.95rem; letter-spacing: -0.01em; position: relative; padding-block: 0.3rem; }
+  .nav a::after { content: ''; position: absolute; left: 0; right: 100%; bottom: -2px; height: 2px; background: var(--brand); border-radius: 2px; transition: right 0.25s var(--ease); }
+  .nav a:hover::after, .nav a[aria-current]::after { right: 0; }
+  .nav a[aria-current] { color: var(--brand); }
+  .header-actions { display: flex; align-items: center; gap: 0.75rem; margin-left: auto; }
+  .theme-toggle { display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 999px; border: 1.5px solid var(--line); background: var(--glass); color: var(--ink); cursor: pointer; transition: border-color 0.2s var(--ease), background-color 0.2s var(--ease), transform 0.2s var(--ease); }
+  .theme-toggle:hover { border-color: var(--line-strong); transform: translateY(-2px); }
+  .theme-toggle svg { width: 19px; height: 19px; }
+  .theme-toggle .t-moon { display: none; }
+  :root[data-theme="dark"] .theme-toggle .t-sun { display: none; }
+  :root[data-theme="dark"] .theme-toggle .t-moon { display: block; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .theme-toggle .t-sun { display: none; } :root:not([data-theme="light"]) .theme-toggle .t-moon { display: block; } }
+  .header-cta { min-height: 42px; min-width: 0; padding: 0.5em 1.3em; font-size: 0.94rem; }
   @media (max-width: 900px) {
-    .site-header { position: static; }
+    .site-header { position: static; background: var(--bg); border-bottom-color: var(--line); }
     .bar { flex-wrap: wrap; gap: 0 1rem; padding-block: 0.6rem 0; }
-    nav[aria-label='Основное меню'] { order: 3; width: 100%; overflow-x: auto; }
-    .nav { gap: 1.1rem; padding-block: 0.5rem 0.7rem; white-space: nowrap; }
+    nav[aria-label='Основное меню'] { order: 3; width: 100%; overflow-x: auto; margin: 0; }
+    .nav { gap: 1.3rem; padding-block: 0.5rem 0.7rem; white-space: nowrap; }
   }
-  .site-footer { background: var(--ink); color: #c9d3e0; margin-top: 2rem; }
-  .foot { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 2rem; padding-block: 3rem; }
-  .foot-brand { font: 700 1.1rem var(--display); color: #fff; }
-  .foot-links { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.55rem; }
-  .site-footer a, .linklike { color: #c9d3e0; font: inherit; }
+
+  .site-footer { background: #121417; color: #aeb3ba; margin-top: 0; border-top: 1px solid var(--line); }
+  .foot { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 2.5rem; padding-block: 3.5rem; }
+  .foot-brand { font: 700 1.15rem var(--display); color: #fff; letter-spacing: -0.02em; margin-bottom: 0.5rem; }
+  .foot-links { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.6rem; }
+  .site-footer a, .linklike { color: #aeb3ba; font: inherit; text-decoration: none; transition: color 0.2s var(--ease); }
   .site-footer a:hover, .linklike:hover { color: #fff; }
   .linklike { background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
-  @media (max-width: 760px) { .foot { grid-template-columns: 1fr; } }
-  .consent { position: fixed; inset: auto 1rem 1rem 1rem; max-width: 34rem; margin-left: auto; background: #fff; border: 1px solid var(--line); border-radius: var(--r); padding: 1rem 1.2rem; box-shadow: 0 12px 40px rgba(14, 26, 43, 0.18); z-index: 50; }
+  @media (max-width: 760px) { .foot { grid-template-columns: 1fr; gap: 2rem; } }
+  .consent { position: fixed; inset: auto 1rem 1rem 1rem; max-width: 34rem; margin-left: auto; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r); padding: 1rem 1.2rem; box-shadow: var(--shadow); z-index: 50; }
   .consent-btns { display: flex; gap: 0.6rem; flex-wrap: wrap; }
-  .consent .btn { min-height: 44px; padding: 0.5em 1.2em; font-size: 0.95rem; }
+  .consent .btn { min-height: 44px; min-width: 0; padding: 0.5em 1.2em; font-size: 0.95rem; }
 </style>
