@@ -4,40 +4,26 @@ import Breadcrumbs from '../components/Breadcrumbs.astro';
 import BotButton from '../components/BotButton.astro';
 import { BOT_COUNTRIES, DIRECT_COUNTRIES, FACTS_CHECKED } from '../site';
 
-const LINKS: Record<string, string> = {
-  'Австрия': 'https://www.bmeia.gv.at/en/austrian-embassy-nicosia/travels-to-austria/entrance-and-residence/how-to-apply',
-  'Венгрия': 'https://visa.vfsglobal.com/one-pager/hungary/cyprus/english/',
-  'Словакия': 'https://www.mzv.sk/en/web/nikozia-en/services/visa-information/schengen-visa',
-  'Хорватия': 'https://visa.vfsglobal.com/one-pager/croatia/cyprus/english/',
-  'Финляндия': 'https://visa.vfsglobal.com/one-pager/Finland/Cyprus/English/',
-  'Швеция': 'https://www.swedenabroad.se/en/about-sweden-non-swedish-citizens/cyprus/going-to-sweden/apply-for-a-visa/',
-  'Германия': 'https://nikosia.diplo.de/cy-en/service/1672100-1672100',
-  'Нидерланды': 'https://www.netherlandsworldwide.nl/visa-the-netherlands/schengen-visa/apply-cyprus',
-};
-const fallback = (c: (typeof BOT_COUNTRIES)[number]) =>
-  c.system === 'VFS Global' ? 'https://visa.vfsglobal.com/' : LINKS['Германия'];
 const checked = new Date(FACTS_CHECKED + 'T12:00:00Z').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 ---
 <Base
   title="Куда подавать на шенген с Кипра: 18 стран — Easy Visa"
-  description="Через кого записываться на шенген на Кипре: VFS Global, посольство Германии, Франция, Испания, Италия. Таблица по странам со ссылками на официальные страницы."
+  description="В какие страны Шенгена можно записаться на подачу с Кипра через Easy Visa и куда записываются напрямую — Франция, Испания, Италия. Список по странам со ссылками."
 >
   <Breadcrumbs items={[{ name: 'Страны', href: '/strany/' }]} />
   <div class="wrap section-tight">
     <h1>Куда и как подавать на шенген с Кипра</h1>
-    <p class="lead muted">У каждой страны Шенгена на Кипре свой способ записи. Ниже — через кого идёт подача и где официальная информация. Данные проверены {checked}.</p>
+    <p class="lead muted">Записываем на подачу документов в 15 стран Шенгена. Ещё в три страны записываются напрямую — показываем, как именно. Данные проверены {checked}.</p>
 
     <h2>Страны, в которые записывает бот</h2>
     <div class="table-scroll">
       <table>
-        <thead><tr><th scope="col">Страна</th><th scope="col">Где подаёте</th><th scope="col">Особенности</th><th scope="col">Официальная страница</th></tr></thead>
+        <thead><tr><th scope="col">Страна</th><th scope="col">Особенности</th></tr></thead>
         <tbody>
           {BOT_COUNTRIES.map((c) => (
             <tr>
               <th scope="row">{c.name}</th>
-              <td>{c.system === 'VFS Global' ? 'Визовый центр VFS Global, Никосия' : 'Посольство Германии, Никосия'}</td>
               <td>{c.note ?? '—'}</td>
-              <td><a href={LINKS[c.name] ?? fallback(c)} rel="noopener" target="_blank">{LINKS[c.name] ? 'открыть' : c.system === 'VFS Global' ? 'сайт VFS' : 'посольство Германии'}</a></td>
             </tr>
           ))}
         </tbody>
@@ -57,7 +43,7 @@ const checked = new Date(FACTS_CHECKED + 'T12:00:00Z').toLocaleDateString('ru-RU
         </tbody>
       </table>
     </div>
-    <p class="muted prose">Греция, Мальта и другие страны, которых нет в таблицах: бот пока в них не записывает. Порядок записи уточняйте на сайте посольства страны на Кипре.</p>
+    <p class="muted prose">Греция, Мальта и другие страны, которых нет в таблицах: бот пока в них не записывает. Порядок записи уточняйте на сайте консульства страны на Кипре.</p>
 
     <div class="prose">
       <h2 class="mt">Как выбрать страну</h2>

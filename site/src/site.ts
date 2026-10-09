@@ -12,6 +12,11 @@ export const BRAND = 'Easy Visa';
 export const BOT_USERNAME = 'Easyvisaforyoubot';
 export const BOT_URL = `https://t.me/${BOT_USERNAME}`;
 
+/** Client-facing manager on Telegram (second contact channel besides the bot's /support). */
+export const MANAGER_USERNAME = 'bestvisamanager';
+export const MANAGER_NAME = 'Алена';
+export const MANAGER_URL = `https://t.me/${MANAGER_USERNAME}`;
+
 /** Facts last checked against the bot code and official pages. Shown on pages as "проверено". */
 export const FACTS_CHECKED = '2026-10-08';
 
@@ -50,14 +55,14 @@ export const BOT_COUNTRIES: Country[] = [
   { name: 'Хорватия', system: 'VFS Global' },
   { name: 'Чехия', system: 'VFS Global' },
   { name: 'Финляндия', system: 'VFS Global' },
-  { name: 'Швеция', system: 'VFS Global', note: 'визы оформляет Финляндия, подача в том же центре VFS' },
+  { name: 'Швеция', system: 'VFS Global' },
   { name: 'Германия', system: 'посольство Германии' },
-  { name: 'Нидерланды', system: 'посольство Германии', note: 'Германия представляет страну по визам на Кипре' },
-  { name: 'Бельгия', system: 'посольство Германии', note: 'Германия представляет страну по визам на Кипре' },
-  { name: 'Дания', system: 'посольство Германии', note: 'Германия представляет страну по визам на Кипре' },
-  { name: 'Норвегия', system: 'посольство Германии', note: 'Германия представляет страну по визам на Кипре' },
-  { name: 'Исландия', system: 'посольство Германии', note: 'Германия представляет страну по визам на Кипре' },
-  { name: 'Люксембург', system: 'посольство Германии', note: 'Германия представляет страну по визам на Кипре' },
+  { name: 'Нидерланды', system: 'посольство Германии' },
+  { name: 'Бельгия', system: 'посольство Германии' },
+  { name: 'Дания', system: 'посольство Германии' },
+  { name: 'Норвегия', system: 'посольство Германии' },
+  { name: 'Исландия', system: 'посольство Германии' },
+  { name: 'Люксембург', system: 'посольство Германии' },
 ];
 
 /** Countries where you book yourself — the bot doesn't book them, but we point to the official route. */
