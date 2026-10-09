@@ -29,6 +29,85 @@ def available() -> bool:
 STEPS: list[str] = []  # last login attempt's step trace, for reporting to the admin
 
 
+def _proxy_cfg(proxy: str | None):
+    if not proxy:
+        return None
+    m = re.match(r"https?://(?:([^:]+):([^@]+)@)?([^:]+):(\d+)", proxy)
+    if not m:
+        return None
+    u, pw, host, port = m.groups()
+    cfg = {"server": f"http://{host}:{port}"}
+    if u:
+        cfg |= {"username": u, "password": pw}
+    return cfg
+
+
+def _launch_args(proxy: str | None) -> dict:
+    headless = os.getenv("BROWSER_HEADLESS", "virtual")
+    hl = True if headless == "true" else (False if headless == "false" else "virtual")
+    args = dict(headless=hl, os="windows", humanize=True, proxy=_proxy_cfg(proxy))
+    try:
+        import camoufox.locale  # noqa: F401  geoip extra present?
+        args["geoip"] = bool(proxy)
+    except Exception:
+        pass
+    return args
+
+
+# JS injected before page scripts: capture the sitekey the moment VFS calls turnstile.render(...)
+_SK_HOOK = """
+(() => {
+  window.__ts_sitekey = null;
+  let real = undefined;
+  try {
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      get() { return real; },
+      set(v) {
+        real = v;
+        if (v && typeof v.render === 'function') {
+          const orig = v.render.bind(v);
+          v.render = (c, opts) => { try { if (opts && opts.sitekey) window.__ts_sitekey = opts.sitekey; } catch(e){} return orig(c, opts); };
+        }
+      }
+    });
+  } catch(e) {}
+})();
+"""
+
+
+async def sitekey_via_browser(country: str, mission: str, proxy: str | None = None, timeout: int = 50) -> str | None:
+    """Load the login page in Camoufox and read the Turnstile sitekey (render hook → DOM → iframe). No solving."""
+    if not available():
+        return None
+    from camoufox.async_api import AsyncCamoufox
+    url = LOGIN_URL.format(country=country, mission=mission)
+    try:
+        async with AsyncCamoufox(**_launch_args(proxy)) as browser:
+            page = await browser.new_page()
+            await page.add_init_script(_SK_HOOK)
+            await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+            deadline = asyncio.get_event_loop().time() + timeout
+            while asyncio.get_event_loop().time() < deadline:
+                sk = await page.evaluate("""() => {
+                  if (window.__ts_sitekey) return window.__ts_sitekey;
+                  const el = document.querySelector('[data-sitekey]');
+                  if (el) return el.getAttribute('data-sitekey');
+                  for (const f of document.querySelectorAll('iframe')) {
+                    const m = (f.src||'').match(/0x4AAAAAAA[A-Za-z0-9_\\-]+/);
+                    if (m) return m[0];
+                  }
+                  return null;
+                }""")
+                if sk:
+                    log.info("sitekey via browser: %s", sk)
+                    return sk
+                await asyncio.sleep(1.5)
+    except Exception as e:
+        log.warning("sitekey_via_browser failed: %s", e)
+    return None
+
+
 async def login(country: str, mission: str, email: str, password: str, proxy: str | None = None,
                 timeout: int = 90) -> dict | None:
     """Returns {'token': str, 'cookies': {...}, 'user_agent': str} or None. Runs the whole browser login."""

@@ -81,6 +81,14 @@ async def sitekey(country: str, mission: str, proxy: str | None = None) -> str |
                 m = _SK_RE.search(js)
                 if m:
                     return _remember(m.group(0))
+    # last resort: load the page in Camoufox and read the sitekey from turnstile.render / DOM
+    try:
+        from . import vfs_browser
+        sk = await vfs_browser.sitekey_via_browser(country, mission, proxy)
+        if sk:
+            return _remember(sk)
+    except Exception as e:
+        log.info("browser sitekey discovery failed: %s", e)
     log.warning("turnstile sitekey not found — set VFS_TURNSTILE_SITEKEY in env (grab it from the login page DevTools)")
     return None
 
