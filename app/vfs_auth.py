@@ -175,7 +175,7 @@ async def login_session(country: str, mission: str, proxy: str | None, mailbox_w
         try:
             sk = await capsolver.sitekey(country, mission, proxy)
             token = await capsolver.solve_turnstile(
-                f"https://visa.vfsglobal.com/{country}/en/{mission}/login", sk, proxy=proxy) if sk else None
+                f"https://visa.vfsglobal.com/{country}/en/{mission}/login", sk) if sk else None
             if token:
                 sess = VfsSession(country, mission, proxy)
                 try:
