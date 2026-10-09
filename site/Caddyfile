@@ -1,0 +1,26 @@
+# SITE_ADDRESS is ":80" until a domain is set. Set it to the real domain (e.g. easyvisacy.com)
+# and Caddy gets a Let's Encrypt certificate automatically on 443.
+{$SITE_ADDRESS::80} {
+	root * /srv
+	encode gzip zstd
+
+	# short ad/link aliases -> real pages
+	redir /wheel /koleso-fortuny/ 301
+	redir /koleso /koleso-fortuny/ 301
+	redir /ref /referalnaya-programma/ 301
+	redir /invite /referalnaya-programma/ 301
+	redir /prices /ceny/ 301
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+	@immutable path /fonts/* /_astro/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	try_files {path} {path}/ {path}.html =404
+	file_server
+}

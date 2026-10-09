@@ -39,6 +39,23 @@ services:
       - browser_state:/app/state
       - ./app:/app/app      # live code mount: `git pull && docker compose restart bot` picks up code changes without rebuild
 
+  site:
+    build:
+      context: ./site
+      args:
+        SITE_URL: ${SITE_URL:-}        # empty = noindex preview; set to https://<domain> once bought, then rebuild
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}  # ":80" until a domain; set to the domain for auto-HTTPS on 443
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   pgdata:
   browser_state:
+  caddy_data:
+  caddy_config:
