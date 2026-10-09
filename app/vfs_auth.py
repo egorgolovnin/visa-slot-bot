@@ -65,6 +65,7 @@ class VfsSession:
         self.obtained = 0.0
         self.cookies: dict = {}
         self.impersonate = "chrome124"  # a widely-supported default; login picks the best available
+        self.ua: str | None = None      # the exact UA cf_clearance is bound to; reused by in-account calls
 
     @property
     def alive(self) -> bool:
@@ -83,6 +84,7 @@ class VfsSession:
         from . import cf
         clearance = await cf.clearance(self.country, self.mission, proxy=self.proxy) if cf.enabled() else None
         ua = (clearance or {}).get("user_agent") or UA
+        self.ua = ua
         if clearance:
             self.cookies.update(clearance["cookies"])
         # cf_clearance is bound to the browser fingerprint; use curl_cffi profiles it actually supports.

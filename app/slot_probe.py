@@ -25,15 +25,23 @@ async def _post(sess: VfsSession, path: str, payload: dict) -> tuple[int, str]:
     if clearance:
         sess.cookies.update(clearance.get("cookies", {}))
         ua = clearance.get("user_agent")
+    import re
+    ua = ua or getattr(sess, "ua", None) or ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+    major = (re.search(r"Chrome/(\d+)", ua) or [None, "124"])[1]
+    ch_ua = f'"Chromium";v="{major}", "Google Chrome";v="{major}", "Not.A/Brand";v="99"'
     async with sess._session() as s:
         if sess.cookies:
             s.cookies.update(sess.cookies)
-        headers = {"accept": "application/json, text/plain, */*", "content-type": "application/json",
-                   "origin": "https://visa.vfsglobal.com", "referer": "https://visa.vfsglobal.com/",
+        # Mirror the exact header set the login request uses so Cloudflare fingerprints us the same way.
+        headers = {"accept": "application/json, text/plain, */*", "accept-language": "en-US,en;q=0.9",
+                   "content-type": "application/json", "origin": "https://visa.vfsglobal.com",
+                   "referer": f"https://visa.vfsglobal.com/{sess.country}/en/{sess.mission}/dashboard",
                    "route": f"{sess.country}/en/{sess.mission}", "clientsource": clientsource(),
+                   "cfmlift": "mobile", "priority": "u=1, i", "user-agent": ua, "sec-ch-ua": ch_ua,
+                   "sec-ch-ua-mobile": "?0", "sec-ch-ua-platform": '"Windows"', "sec-fetch-site": "same-site",
+                   "sec-fetch-mode": "cors", "sec-fetch-dest": "empty",
                    "authorize": sess.token or "", "authorization": sess.token or ""}
-        if ua:
-            headers["user-agent"] = ua
         r = await s.post(f"{LIFT}/{path}", headers=headers, json=payload, impersonate=sess.impersonate)
         return r.status_code, (r.text or "")
 
