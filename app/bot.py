@@ -44,7 +44,7 @@ ADMIN_COMMANDS = [
     ("link", "Ссылка с меткой: /link community"),
     ("broadcast", "Рассылка: /broadcast текст"),
     ("post", "Пост в канал: /post текст (или reply)"),
-    ("givediscount", "Выдать скидку: /givediscount ID %"),
+    ("givediscount", "Скидка: /givediscount @user 100"),
     ("ban", "Заблокировать: /ban ID"),
     ("unban", "Разблокировать: /unban ID"),
     ("health", "Состояние проверок"),

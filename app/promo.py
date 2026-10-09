@@ -60,8 +60,7 @@ async def wheel(message: Message, db: Database) -> None:
     kb = InlineKeyboardBuilder()
     kb.button(text="🎡 Крутить колесо!", callback_data="wheel:spin")
     await message.answer("🎡 <b>Колесо фортуны</b>\nКрути и получи скидку на сервис: 5, 10, 15, 20 или 30%, "
-                         "а с шансом 1% — 100%, запись бесплатно.\n"
-                         "Шансы: 5% — 34%, 10% — 30%, 15% — 20%, 20% — 12%, 30% — 3%, 100% — 1%.\n"
+                         "а с редким шансом — 100%, запись бесплатно.\n"
                          "Одна попытка на человека. Скидка действует на оплату сервиса (не на сбор визового центра) "
                          "и применится к твоей ближайшей заявке автоматически.",
                          reply_markup=kb.as_markup())
@@ -101,12 +100,20 @@ async def give_discount(message: Message, db: Database, settings: Settings) -> N
     if not is_admin(message.from_user.id, settings):
         return
     parts = (message.text or "").split()
-    if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
-        await message.answer("Формат: /givediscount <tg_id> <percent>")
+    if len(parts) != 3 or not parts[2].lstrip("+").isdigit():
+        await message.answer("Формат: <code>/givediscount @username 100</code> или <code>/givediscount tg_id 100</code>")
         return
-    uid, pct = int(parts[1]), max(1, min(100, int(parts[2])))
+    target, pct = parts[1], max(1, min(100, int(parts[2])))
+    if target.isdigit():
+        uid = int(target)
+    else:
+        uid = await db.tg_id_by_username(target)
+        if not uid:
+            await message.answer(f"Не нашёл {html.escape(target)} среди тех, кто писал боту. "
+                                 "Пусть сначала нажмёт /start, или дай числовой ID.")
+            return
     await db.add_discount(uid, pct, "manual")
-    await message.answer(f"Скидка {pct}% выдана {uid}.")
+    await message.answer(f"Скидка {pct}% выдана {html.escape(target)}.")
     try:
         await message.bot.send_message(uid, f"🎁 Тебе начислена скидка <b>{pct}%</b> на сервис — применится в заявке.")
     except Exception:

@@ -214,6 +214,14 @@ class Database:
             await self.pool.close()
 
     # ---- users ----
+    async def tg_id_by_username(self, username: str) -> int | None:
+        """Resolve @username -> tg_id among users the bot has seen (case-insensitive)."""
+        uname = username.lstrip("@").strip().lower()
+        if not uname:
+            return None
+        return await self.pool.fetchval(
+            "SELECT tg_id FROM users WHERE lower(username) = $1 ORDER BY last_seen DESC LIMIT 1", uname)
+
     async def touch_user(self, tg_id: int, name: str, username: str | None, lang: str | None,
                          allow_new: bool) -> tuple[bool, bool]:
         """Create or refresh a user. Returns (is_new, allowed)."""
