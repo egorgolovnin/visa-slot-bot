@@ -66,6 +66,8 @@ class Poller:
         self._wake = asyncio.Event()
         self._last_alert: dict[tuple, datetime] = {}
         self._cycle_no = 0
+        self._crash_alerted = False
+        self._stall_alerted = False
 
     async def close(self) -> None:
         await self.client.close()
@@ -74,6 +76,24 @@ class Poller:
     async def alert_admins(self, text: str) -> None:
         for uid in self.s.admin_targets:
             await self.notify(uid, text)
+
+    async def watchdog(self) -> None:
+        """Catches a wedged poller: the process is alive but cycles stopped completing.
+        A full process crash is handled by Docker restart + the startup ping in main."""
+        stale_after = max(900, self.s.poll_interval * 4)  # seconds without a finished cycle
+        await asyncio.sleep(stale_after)
+        while True:
+            last = self.health.last_cycle_at
+            if last is not None:
+                age = (datetime.now(timezone.utc) - last).total_seconds()
+                if age > stale_after and not self._stall_alerted:
+                    self._stall_alerted = True
+                    await self.alert_admins(f"🛑 Проверки слотов зависли: последний успешный цикл был "
+                                            f"{int(age // 60)} мин назад. Проверь /health.")
+                elif age <= stale_after and self._stall_alerted:
+                    self._stall_alerted = False
+                    await self.alert_admins("✅ Проверки слотов снова идут штатно.")
+            await asyncio.sleep(max(120, self.s.poll_interval))
 
     def page_url(self, code: str) -> str:
         if code in RK_MISSIONS:
@@ -361,9 +381,16 @@ class Poller:
                     result = await self.discover()
                     log.info("weekly rediscovery: %s", result)
                 await self.cycle()
+                if self._crash_alerted:  # a previous crash healed
+                    self._crash_alerted = False
+                    await self.alert_admins("✅ Цикл проверок снова работает после сбоя.")
             except Exception as e:
                 log.exception("cycle crashed")
                 self.health.last_error = f"crash: {e}"[:500]
+                if not self._crash_alerted:
+                    self._crash_alerted = True
+                    await self.alert_admins("🛑 Сбой цикла проверок (слоты сейчас не ищутся):\n"
+                                            f"<code>{html.escape(str(e)[:300])}</code>")
             delay = self.s.poll_interval * self.health.backoff * random.uniform(0.85, 1.15)
             self._wake.clear()
             try:

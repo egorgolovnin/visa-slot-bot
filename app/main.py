@@ -1,10 +1,14 @@
 import asyncio
+import html
 import logging
+import time
+import traceback
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+from aiogram.types import ErrorEvent
 
 from . import config
 from . import cases, mailbox, orders, promo, support, web
@@ -40,11 +44,45 @@ async def main() -> None:
                 return False
         return False
 
+    async def alert_admins(text: str) -> None:
+        for uid in settings.admin_targets:
+            await notify(uid, text)
+
+    # Global handler: any unhandled exception in a user interaction pings the admin group,
+    # throttled so one recurring bug can't spam. This is how we hear about bugs before clients do.
+    _err_seen: dict[str, float] = {}
+
+    async def on_error(event: ErrorEvent) -> bool:
+        exc = event.exception
+        tb = traceback.extract_tb(exc.__traceback__)
+        where = f"{tb[-1].filename.split('/')[-1]}:{tb[-1].lineno}" if tb else "?"
+        sig = f"{type(exc).__name__}@{where}"
+        now = time.monotonic()
+        last = _err_seen.get(sig, 0)
+        _err_seen[sig] = now
+        log.exception("handler error (%s)", sig)
+        if now - last < 600:  # same error within 10 min — already reported
+            return True
+        upd = event.update
+        ctx, user = "", None
+        if getattr(upd, "message", None):
+            user = upd.message.from_user
+            if upd.message.text:
+                ctx = f"\nСообщение: <code>{html.escape(upd.message.text[:80])}</code>"
+        elif getattr(upd, "callback_query", None):
+            user = upd.callback_query.from_user
+            ctx = f"\nКнопка: <code>{html.escape((upd.callback_query.data or '')[:80])}</code>"
+        uid = user.id if user else "?"
+        await alert_admins(f"🐞 Ошибка у пользователя <code>{uid}</code> ({html.escape(sig)}):\n"
+                           f"<code>{html.escape(str(exc)[:300])}</code>{ctx}")
+        return True
+
     poller = Poller(settings, db, notify)
     orders._DB_FOR_STEPS.append(db)
     storage = PgStorage(db)
     await storage.init()
     dp = Dispatcher(storage=storage, db=db, settings=settings, poller=poller)
+    dp.errors.register(on_error)
     dp.message.outer_middleware(TrackingMiddleware())
     dp.callback_query.outer_middleware(TrackingMiddleware())
     for r in (support.router, cases.router, promo.router, orders.router, router):  # state handlers first, catch-all last
@@ -64,11 +102,17 @@ async def main() -> None:
             log.error("crypto pay check failed: %s", e)
     web_runner = await web.start(db, settings, poller, bot)
     task = asyncio.create_task(poller.run())
+    wd_task = asyncio.create_task(poller.watchdog())
     pay_task = asyncio.create_task(orders.payment_watcher(bot, db, settings))
+    try:
+        await alert_admins("🔄 Easy Visa запущен. Если это не плановый деплой — бот перезапускался сам (падал).")
+    except Exception:
+        log.exception("startup ping failed")
     try:
         await dp.start_polling(bot)
     finally:
         task.cancel()
+        wd_task.cancel()
         if web_runner:
             await web_runner.cleanup()
         pay_task.cancel()
