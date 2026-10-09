@@ -1169,7 +1169,6 @@ async def order_card_cmd(message: Message, command: CommandObject, db: Database,
         await send_admin_card(message.bot, db, message.chat.id, int(command.args), settings)
 
 
-@router.callback_query(F.data.startswith("oa:"))
 async def run_autobook(bot: Bot, db: Database, settings: Settings, poller: Poller, oid: int) -> None:
     from .rk_book import book, BookingError
     from . import mailbox
@@ -1205,6 +1204,7 @@ async def run_autobook(bot: Bot, db: Database, settings: Settings, poller: Polle
     await issue_invoice(bot, db, settings, oid)
 
 
+@router.callback_query(F.data.startswith("oa:"))
 async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, settings: Settings, poller: Poller) -> None:
     if not is_admin(call.from_user.id, settings):
         await call.answer("Только для админа", show_alert=True)
@@ -1217,6 +1217,10 @@ async def order_admin(call: CallbackQuery, state: FSMContext, db: Database, sett
         await call.answer()
         return
     if action == "autobook":
+        o = await db.order(oid)
+        if not o:
+            await call.answer("Нет такой заявки", show_alert=True)
+            return
         a = applicant_people(security.decrypt(o["applicant"]))
         who = a[0].get("full_name") if a else "?"
         kb2 = InlineKeyboardBuilder()
