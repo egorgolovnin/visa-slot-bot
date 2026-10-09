@@ -37,6 +37,7 @@ services:
       - "8080:8080"
     volumes:
       - browser_state:/app/state
+      - ./app:/app/app      # live code mount: `git pull && docker compose restart bot` picks up code changes without rebuild
 
 volumes:
   pgdata:
