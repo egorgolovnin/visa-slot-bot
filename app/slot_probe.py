@@ -7,6 +7,7 @@ Everything goes to the logs; a short summary is sent to admins.
 """
 from __future__ import annotations
 
+import html
 import json
 import logging
 
@@ -44,8 +45,9 @@ async def probe_account(sess: VfsSession) -> str:
             log.info("SLOTPROBE %s status=%s len=%d", path, status, len(text))
             for i in range(0, min(len(text), 6000), 3000):
                 log.info("SLOTPROBE %s part%d: %s", path, i // 3000, text[i:i + 3000])
-            short = text[:160].replace("\n", " ")
-            out.append(f"{path.split('/')[-1]}: {status} · {short}")
+            kind = "HTML" if text[:60].lstrip().lower().startswith(("<!doctype", "<html")) else "json/text"
+            short = html.escape(text[:140].replace("\n", " "))
+            out.append(f"{path.split('/')[-1]}: {status} · {kind} · {short}")
         except Exception as e:
             log.warning("SLOTPROBE %s failed: %s", path, e)
             out.append(f"{path.split('/')[-1]}: ошибка {str(e)[:60]}")
