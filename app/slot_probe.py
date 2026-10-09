@@ -17,6 +17,14 @@ log = logging.getLogger("slot_probe")
 
 
 async def _post(sess: VfsSession, path: str, payload: dict) -> tuple[int, str]:
+    """Authed lift-api POST. lift-api sits behind Cloudflare, so every call needs cf_clearance
+    (via FlareSolverr through the same proxy) alongside the bearer token — same as login."""
+    from . import cf
+    ua = None
+    clearance = await cf.clearance(sess.country, sess.mission, proxy=sess.proxy) if cf.enabled() else None
+    if clearance:
+        sess.cookies.update(clearance.get("cookies", {}))
+        ua = clearance.get("user_agent")
     async with sess._session() as s:
         if sess.cookies:
             s.cookies.update(sess.cookies)
@@ -24,6 +32,8 @@ async def _post(sess: VfsSession, path: str, payload: dict) -> tuple[int, str]:
                    "origin": "https://visa.vfsglobal.com", "referer": "https://visa.vfsglobal.com/",
                    "route": f"{sess.country}/en/{sess.mission}", "clientsource": clientsource(),
                    "authorize": sess.token or "", "authorization": sess.token or ""}
+        if ua:
+            headers["user-agent"] = ua
         r = await s.post(f"{LIFT}/{path}", headers=headers, json=payload, impersonate=sess.impersonate)
         return r.status_code, (r.text or "")
 
