@@ -6,11 +6,12 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-# load BOT_TOKEN / ADMIN_CHAT_ID / ADMIN_IDS from .env
-set -a
-# shellcheck disable=SC1091
-source .env
-set +a
+# Read only the values we need, WITHOUT sourcing .env (values like the mail app-password contain
+# spaces and would make `source` try to run them as commands).
+getenv() { grep -E "^$1=" .env | head -1 | cut -d= -f2-; }
+BOT_TOKEN="$(getenv BOT_TOKEN)"
+ADMIN_CHAT_ID="$(getenv ADMIN_CHAT_ID)"
+ADMIN_IDS="$(getenv ADMIN_IDS)"
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="${BACKUP_DIR:-/root/backups}"
