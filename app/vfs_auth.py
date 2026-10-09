@@ -193,10 +193,10 @@ async def login_session(country: str, mission: str, proxy: str | None, mailbox_w
                 log.warning("capsolver: no token/sitekey, falling back")
         except Exception as e:
             log.warning("capsolver login failed: %s", e)
-    # 1) browser login — the only method that reliably passes VFS anti-bot
+    # 1) browser login — only when Capsolver is NOT the chosen path (it's slow and flaky under xvfb)
     try:
         from . import vfs_browser
-        if vfs_browser.available():
+        if not capsolver.enabled() and vfs_browser.available():
             data = await vfs_browser.login(country, mission, email, pwd, proxy=proxy)
             if data and data.get("token"):
                 sess = VfsSession(country, mission, proxy)
