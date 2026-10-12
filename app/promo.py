@@ -68,11 +68,15 @@ async def wheel(message: Message, db: Database) -> None:
 
 @router.callback_query(F.data == "wheel:spin")
 async def wheel_spin(call: CallbackQuery, db: Database, settings: Settings) -> None:
-    if not await db.can_spin_wheel(call.from_user.id):
+    # Atomic claim: only the first of two fast taps wins the one allowed spin.
+    if not await db.mark_wheel_spun(call.from_user.id):
         await call.answer("Ты уже крутил колесо", show_alert=True)
         return
-    await db.mark_wheel_spun(call.from_user.id)
     await call.answer()
+    # Award the discount right away (before the cosmetic animation) so a claimed spin always pays out.
+    percent = random.choices([p for p, _ in WHEEL], weights=[w for _, w in WHEEL])[0]
+    await db.add_discount(call.from_user.id, percent, "wheel")
+    await db.log_event(call.from_user.id, "wheel", str(percent))
     # little animation
     msg = call.message
     for frame in ("🎡 Крутим… 5% · 10% · 15%", "🎡 Крутим… 20% · 30% · 5%", "🎡 Почти…"):
@@ -81,9 +85,6 @@ async def wheel_spin(call: CallbackQuery, db: Database, settings: Settings) -> N
             await asyncio.sleep(0.6)
         except Exception:
             break
-    percent = random.choices([p for p, _ in WHEEL], weights=[w for _, w in WHEEL])[0]
-    await db.add_discount(call.from_user.id, percent, "wheel")
-    await db.log_event(call.from_user.id, "wheel", str(percent))
     kb = InlineKeyboardBuilder()
     kb.button(text="📝 Записаться со скидкой", callback_data="go:order")
     try:

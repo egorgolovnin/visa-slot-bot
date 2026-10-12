@@ -928,8 +928,7 @@ async def _order_confirm(call: CallbackQuery, state: FSMContext, db: Database, s
     order_id = await db.create_order(call.from_user.id, data["mission"], d_from, d_to, security.encrypt(applicant),
                                      destination=data.get("destination"), fee=fee, people=n)
     disc = await db.best_discount(call.from_user.id)
-    if disc:
-        await db.use_discount(disc["id"], order_id)
+    if disc and await db.use_discount(disc["id"], order_id):  # stamp only if we actually claimed it
         await db.update_order(order_id, discount_id=disc["id"], discount_pct=disc["percent"])
     await db.log_event(call.from_user.id, "order_new", f"#{order_id} {data.get('destination')}")
     await log_step(db, call.from_user.id, "submitted")
@@ -1197,8 +1196,11 @@ async def run_autobook(bot: Bot, db: Database, settings: Settings, poller: Polle
         await bot.send_message(admin, f"⚠️ Автобронь #{oid}: {html.escape(res.get('detail',''))}. Попробуй вручную.")
         return
     when = res["when"]
+    base = await service_total(db, settings, "deu", people)
+    disc = o["discount_pct"] or 0
+    price = 0 if disc >= 100 else round(base * (100 - disc) / 100, 2)  # honour the client's discount (incl. 100%)
     await db.update_order(oid, status="booked", booked_at=datetime.now(timezone.utc), appointment=f"{when}, посольство Германии",
-                          price_eur=await service_total(db, settings, "deu", people))
+                          price_eur=price)
     conf = "✅ подтверждена письмом" if res.get("confirmed") else "⏳ ждёт подтверждения (проверь почту)"
     await bot.send_message(admin, f"🎉 Автобронь #{oid} удалась! Запись: <b>{when}</b>, {conf}.\n{html.escape(res.get('detail',''))}")
     await issue_invoice(bot, db, settings, oid)
@@ -1473,7 +1475,13 @@ async def mark_paid(bot: Bot, db: Database, settings: Settings, oid: int, asset:
     o = await db.order(oid)
     if not o or o["status"] in ("paid", "done"):
         return
-    await reward_referrer(bot, db, settings, o["tg_id"])
+    amt_str = str(amount or "").replace(",", ".").strip()
+    try:
+        paid_positive = float(amt_str) > 0
+    except ValueError:
+        paid_positive = bool(amt_str)  # "" (manual €0) → skip; a non-numeric label → treat as a real payment
+    if paid_positive:  # a friend who paid €0 (100% discount) must not earn the referrer a reward
+        await reward_referrer(bot, db, settings, o["tg_id"])
     await db.update_order(oid, status="paid", paid_at=datetime.now(timezone.utc), paid_asset=asset, paid_amount=amount)
     await db.cancel_direct_for_order(oid)
     if o["invoice_id"] and payments.enabled() and "TRC20" in asset:

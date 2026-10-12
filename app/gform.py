@@ -176,6 +176,15 @@ async def handle_submission(bot: Bot, db, settings, payload: dict) -> dict:
         await db.log_event(uid, "form_error", "; ".join(errors)[:200])
         return {"ok": True, "errors": errors}
 
+    # Consume the one-time token now (atomic): a double-submit or an Apps Script retry
+    # can't create a second order / second fee invoice. Errored submissions above keep
+    # their token, so the user can fix and resend.
+    if not await db.kv_claim(f"form:{data.get('token', '')}"):
+        log.info("form resubmission for an already-processed token: %s", data.get("token"))
+        await bot.send_message(uid, "Эту заявку мы уже приняли ✅ Статус — /myorders. "
+                                    "Чтобы записаться в другую страну, открой форму заново через /order.")
+        return {"ok": True, "duplicate": True}
+
     people = data["people"]
     n = max(1, len(people))
     applicant = {"people": people, "phone": data["phone"], "tg_contact": None,
@@ -186,8 +195,7 @@ async def handle_submission(bot: Bot, db, settings, payload: dict) -> dict:
     oid = await db.create_order(uid, data["mission"], d_from, d_to, security.encrypt(applicant),
                                 destination=data["destination"], fee=fee, people=n)
     disc = await db.best_discount(uid)
-    if disc:
-        await db.use_discount(disc["id"], oid)
+    if disc and await db.use_discount(disc["id"], oid):  # stamp only if we actually claimed it
         await db.update_order(oid, discount_id=disc["id"], discount_pct=disc["percent"])
     await db.log_event(uid, "order_new", f"#{oid} {data['destination']} form n={n}")
     await db.log_event(uid, "fstep", "submitted")

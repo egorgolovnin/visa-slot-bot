@@ -44,17 +44,24 @@ async def eur_to_usdt(eur: float) -> float:
 
 
 async def unique_amount(db, eur: float) -> float:
-    """Exact USDT equivalent (rounded up to the cent) plus a unique 1-50 cent tag among pending payments."""
+    """Exact USDT equivalent (rounded up to the cent) plus a cent tag that is unique among all
+    currently-pending payments, so one incoming transfer can never match two clients' orders."""
     import math
     base = math.ceil(await eur_to_usdt(eur) * 100) / 100
     taken = {round(float(a), 2) for a in await db.pending_direct_amounts()}
-    tags = list(range(1, 51))
-    random.shuffle(tags)
-    for c in tags:
+    cents = list(range(1, 100))
+    random.shuffle(cents)
+    for c in cents:
         amount = round(base + c / 100, 2)
         if amount not in taken:
             return amount
-    return round(base + random.randint(51, 99) / 100, 2)
+    # >99 pending orders sharing this base (practically never): bump whole USDT until unique.
+    extra = 1
+    while True:
+        amount = round(base + extra + random.randint(1, 99) / 100, 2)
+        if amount not in taken:
+            return amount
+        extra += 1
 
 
 async def incoming_transfers(since: datetime) -> list[dict]:

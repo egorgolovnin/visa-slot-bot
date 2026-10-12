@@ -589,6 +589,11 @@ class Database:
     async def kv_get(self, key: str) -> str | None:
         return await self.pool.fetchval("SELECT value FROM kv WHERE key = $1", key)
 
+    async def kv_claim(self, key: str) -> str | None:
+        """Atomically delete a key and return its value (None if it was already gone).
+        One-shot consume: of two concurrent callers only one gets the value."""
+        return await self.pool.fetchval("DELETE FROM kv WHERE key = $1 RETURNING value", key)
+
     async def kv_set(self, key: str, value: str) -> None:
         await self.pool.execute(
             "INSERT INTO kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
@@ -720,10 +725,13 @@ class Database:
             """SELECT id, percent, reason FROM discounts WHERE tg_id = $1 AND used_at IS NULL
                ORDER BY percent DESC, created_at LIMIT 1""", tg_id)
 
-    async def use_discount(self, discount_id: int, order_id: int) -> None:
-        await self.pool.execute(
-            "UPDATE discounts SET used_at = now(), used_order = $2 WHERE id = $1 AND used_at IS NULL",
+    async def use_discount(self, discount_id: int, order_id: int) -> bool:
+        """Atomically claim a discount for an order. Returns True only if THIS call claimed it
+        (so two concurrent orders from one user can't both stamp the same discount)."""
+        row = await self.pool.fetchrow(
+            "UPDATE discounts SET used_at = now(), used_order = $2 WHERE id = $1 AND used_at IS NULL RETURNING id",
             discount_id, order_id)
+        return row is not None
 
     async def release_discount(self, order_id: int) -> None:
         await self.pool.execute(
@@ -748,5 +756,9 @@ class Database:
     async def can_spin_wheel(self, tg_id: int) -> bool:
         return not bool(await self.pool.fetchval("SELECT wheel_spun FROM users WHERE tg_id = $1", tg_id))
 
-    async def mark_wheel_spun(self, tg_id: int) -> None:
-        await self.pool.execute("UPDATE users SET wheel_spun = TRUE WHERE tg_id = $1", tg_id)
+    async def mark_wheel_spun(self, tg_id: int) -> bool:
+        """Atomically claim the one allowed spin. Returns True only if THIS call claimed it,
+        so two fast taps on 'spin' can't both award a discount."""
+        row = await self.pool.fetchrow(
+            "UPDATE users SET wheel_spun = TRUE WHERE tg_id = $1 AND wheel_spun IS NOT TRUE RETURNING tg_id", tg_id)
+        return row is not None
