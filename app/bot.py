@@ -52,6 +52,7 @@ ADMIN_COMMANDS = [
     ("vfslogin", "Проверить автовход в VFS"),
     ("capsolver", "Проверить Capsolver: баланс+sitekey"),
     ("slotprobe", "Разведка эндпоинтов слотов"),
+    ("monprobe", "Сырой ответ поиска слотов: /monprobe aut"),
     ("rkform", "Германия: показать форму записи"),
 ]
 
@@ -777,6 +778,19 @@ async def slotprobe(message: Message, command: CommandObject, poller: Poller, se
             await message.answer("Не вошёл — сначала нужен успешный /vfslogin.")
             return
         await message.answer(await probe_account(sess))
+    except Exception as e:
+        await message.answer(f"Ошибка: <code>{html.escape(str(e))[:400]}</code>")
+
+
+@router.message(Command("monprobe"))
+async def monprobe(message: Message, command: CommandObject, poller: Poller, settings: Settings) -> None:
+    if not await admin_only(message, settings):
+        return
+    mission = (command.args or "aut").strip().lower()
+    await message.answer(f"Публичный поиск слотов ({mission}), сырой ответ…")
+    try:
+        raw = await poller.client.raw_probe(mission)
+        await message.answer(f"<code>{html.escape(raw[:3500])}</code>")
     except Exception as e:
         await message.answer(f"Ошибка: <code>{html.escape(str(e))[:400]}</code>")
 

@@ -154,3 +154,29 @@ class VfsPublicClient:
             last = f"{r.status_code}: {text[:120]}"
             log.debug("profile %s rejected for %s: %s", profile, mission, last)
         raise Blocked(last)
+
+    async def raw_probe(self, code: str) -> str:
+        """Diagnostics: hit the public earliest-slot endpoint and return the raw
+        status + body + a few response headers, without raising. One line per profile."""
+        country, mission = self.split(code, self.country)
+        payload = {"missionCode": mission, "countryCode": country, "cultureCode": "en-US"}
+        headers = {
+            "accept": "application/json, text/plain, */*",
+            "content-type": "application/json",
+            "origin": "https://visa.vfsglobal.com",
+            "referer": "https://visa.vfsglobal.com/",
+            "route": f"{country}/en/{mission}",
+        }
+        out = [f"route={country}/en/{mission}  payload={payload}"]
+        for profile in IMPERSONATE:
+            try:
+                r = await self.session.post(ENDPOINT, json=payload, headers=headers, impersonate=profile)
+            except Exception as e:
+                out.append(f"{profile}: EXC {type(e).__name__}: {str(e)[:120]}")
+                continue
+            h = r.headers
+            hint = " ".join(f"{k}={h.get(k)}" for k in ("cf-mitigated", "cf-ray", "content-type", "server") if h.get(k))
+            out.append(f"{profile}: {r.status_code} {(r.text or '')[:200]}\n   {hint}")
+            if r.status_code == 200:
+                break
+        return "\n".join(out)
