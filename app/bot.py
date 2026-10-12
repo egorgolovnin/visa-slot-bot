@@ -799,9 +799,25 @@ async def monprobe(message: Message, command: CommandObject, poller: Poller, set
     await message.answer(f"Публичный поиск слотов ({mission}), сырой ответ…")
     try:
         raw = await poller.client.raw_probe(mission)
-        await message.answer(f"<code>{html.escape(raw[:3500])}</code>")
+        await message.answer(f"<code>{html.escape(raw[:3000])}</code>")
     except Exception as e:
         await message.answer(f"Ошибка: <code>{html.escape(str(e))[:400]}</code>")
+    # Run the REAL production parser so we confirm the whole chain, not just HTTP 200.
+    try:
+        slots, updated = await poller.client.fetch(mission)
+        dated = [s for s in slots if s.earliest]
+        unparsed = [s.raw_date for s in slots if s.raw_date and not s.earliest]
+        lines = [f"🔎 Разобрано: {len(slots)} центр(ов), с датами {len(dated)}, данные от {updated or '—'}"]
+        for s in dated[:5]:
+            lines.append(f"• {html.escape(s.centre)} / {html.escape(s.category)}: {s.earliest.isoformat()}")
+        if unparsed:
+            lines.append("⚠️ НЕ разобрал даты: " + ", ".join(f"<code>{html.escape(str(u)[:30])}</code>" for u in unparsed[:3]))
+        if not dated and not unparsed:
+            lines.append("Свободных дат сейчас нет — это норма (парсер отработал чисто).")
+        await message.answer("\n".join(lines))
+    except Exception as e:
+        await message.answer(f"Парсинг/запрос вернул: <code>{html.escape(str(e))[:300]}</code> "
+                             "(NotOffered/Blocked здесь — это норма, если VFS временно пустой)")
 
 
 @router.message(Command("rkform"))

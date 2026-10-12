@@ -68,6 +68,7 @@ class Poller:
         self._cycle_no = 0
         self._crash_alerted = False
         self._stall_alerted = False
+        self._dateparse_alerted: set[str] = set()   # missions we've warned about an unparseable slot date
 
     async def close(self) -> None:
         await self.client.close()
@@ -216,6 +217,17 @@ class Poller:
                                             + html.escape(report) + "\n\nПерешли это в чат с разработкой — допишем автобронь.")
             log.info("%s: %d pairs, %d with dates, updated=%s", code, len(slots),
                      sum(1 for x in slots if x.earliest), updated)
+            # Silent-miss guard: VFS returned a date string we couldn't parse -> the slot would be
+            # treated as "none" and never announced. Page the admin once instead of dropping it.
+            unparsed = [s.raw_date for s in slots if s.raw_date and not s.earliest]
+            if unparsed and code not in self._dateparse_alerted:
+                self._dateparse_alerted.add(code)
+                await self.alert_admins(
+                    f"⚠️ {html.escape(name)}: пришла дата слота, которую бот не смог разобрать — "
+                    f"<code>{html.escape(str(unparsed[0])[:40])}</code>.\n"
+                    "Слоты по этой стране могут НЕ ловиться. Нужно добавить формат даты в парсер.")
+            elif not unparsed:
+                self._dateparse_alerted.discard(code)
             first_sight = not await self.db.was_fetched(code)
             changes = diff(await self.db.current(code), slots)
             await self.db.save_fetch(code, slots, changes, updated)

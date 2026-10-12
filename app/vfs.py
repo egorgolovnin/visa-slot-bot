@@ -26,7 +26,8 @@ SCHENGEN: dict[str, str] = {
     "rou": "Румыния", "svk": "Словакия", "svn": "Словения", "swe": "Швеция",
 }
 
-DATE_FORMATS = ("%d %b %Y", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y")
+DATE_FORMATS = ("%d %b %Y", "%d %B %Y", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
+                "%d.%m.%Y", "%d-%m-%Y", "%m/%d/%Y", "%d/%m/%Y")
 
 
 class Blocked(Exception):
