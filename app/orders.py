@@ -1204,6 +1204,7 @@ async def run_autobook(bot: Bot, db: Database, settings: Settings, poller: Polle
     conf = "✅ подтверждена письмом" if res.get("confirmed") else "⏳ ждёт подтверждения (проверь почту)"
     await bot.send_message(admin, f"🎉 Автобронь #{oid} удалась! Запись: <b>{when}</b>, {conf}.\n{html.escape(res.get('detail',''))}")
     await issue_invoice(bot, db, settings, oid)
+    await offer_case_post(bot, db, settings, oid)
 
 
 @router.callback_query(F.data.startswith("oa:"))
@@ -1332,6 +1333,69 @@ async def booking_details(message: Message, state: FSMContext, db: Database, set
     await db.log_event(o["tg_id"], "order_booked", f"#{oid}")
     await issue_invoice(message.bot, db, settings, oid)
     await message.answer(f"Готово: заявка #{oid} забронирована, клиенту отправлен счёт на {price:.0f} €.")
+    await offer_case_post(message.bot, db, settings, oid)
+
+
+# ---------------- "поймали слот" channel post (admin approves before it goes public) ----------------
+_CASE_DATE_RE = re.compile(r"\b(\d{1,2}[.\/]\d{1,2}(?:[.\/]\d{2,4})?)\b")
+
+
+def case_post_text(o, bot_username: str) -> str:
+    """Anonymised post for the public channel: country + appointment date only, no personal data."""
+    dest = o["destination"] if "destination" in o.keys() else None
+    country = DESTINATIONS[dest][0] if dest in DESTINATIONS else (o["mission"] or "").upper()
+    n = (o["people"] if "people" in o.keys() else 1) or 1
+    who = f" на {n} чел." if n > 1 else ""
+    m = _CASE_DATE_RE.search(o["appointment"] or "")
+    when = f" на {m.group(1)}" if m else ""
+    return (f"✅ Поймали слот — <b>{html.escape(country)}</b>{who}\n"
+            f"Клиент записан{when} 🎉\n\n"
+            f"Запись на шенген с Кипра: @{bot_username}")
+
+
+async def offer_case_post(bot: Bot, db: Database, settings: Settings, oid: int) -> None:
+    """After a booking, send the admin the ready channel post to approve BEFORE it goes public."""
+    if not settings.channel:
+        return
+    o = await db.order(oid)
+    if not o:
+        return
+    try:
+        me = await bot.get_me()
+        draft = case_post_text(o, me.username)
+        kb = InlineKeyboardBuilder()
+        kb.button(text="📣 Опубликовать", callback_data=f"cp:ok:{oid}")
+        kb.button(text="✖️ Пропустить", callback_data=f"cp:no:{oid}")
+        kb.adjust(2)
+        await bot.send_message(settings.admin_targets[0],
+                               f"📣 Пост для канала {settings.channel} (на твой апрув):\n\n{draft}",
+                               reply_markup=kb.as_markup())
+    except Exception:
+        log.warning("offer_case_post failed for #%s", oid)
+
+
+@router.callback_query(F.data.startswith("cp:"))
+async def case_post_cb(call: CallbackQuery, db: Database, settings: Settings) -> None:
+    if call.from_user.id not in settings.admin_ids:
+        await call.answer("Только для админа", show_alert=True)
+        return
+    _, action, oid = call.data.split(":")
+    me = await call.bot.get_me()
+    o = await db.order(int(oid))
+    base = f"📣 Пост для канала {settings.channel}:\n\n" + (case_post_text(o, me.username) if o else "")
+    if action == "no":
+        await call.message.edit_text(base + "\n\n— ✖️ пропущено")
+        await call.answer("Пропущено")
+        return
+    if not o:
+        await call.answer("Заявка не найдена", show_alert=True)
+        return
+    try:
+        await call.bot.send_message(settings.channel, case_post_text(o, me.username))
+        await call.message.edit_text(base + f"\n\n— ✅ опубликовано в {settings.channel}")
+        await call.answer("Опубликовано")
+    except Exception as e:
+        await call.answer("Не вышло: " + str(e)[:150], show_alert=True)
 
 
 # ---------------- money ----------------
