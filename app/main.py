@@ -58,11 +58,11 @@ async def main() -> None:
         where = f"{tb[-1].filename.split('/')[-1]}:{tb[-1].lineno}" if tb else "?"
         sig = f"{type(exc).__name__}@{where}"
         now = time.monotonic()
-        last = _err_seen.get(sig, 0)
-        _err_seen[sig] = now
+        last = _err_seen.get(sig)
         log.exception("handler error (%s)", sig)
-        if now - last < 600:  # same error within 10 min — already reported
-            return True
+        if last is not None and now - last < 600:  # reported within the last 10 min — stay quiet
+            return True                             # keep `last` so it reports again after the window
+        _err_seen[sig] = now                        # mark the time of THIS report, not every occurrence
         upd = event.update
         ctx, user = "", None
         if getattr(upd, "message", None):

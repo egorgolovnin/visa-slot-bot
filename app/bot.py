@@ -554,7 +554,7 @@ async def panel_cmd(message: Message, settings: Settings) -> None:
     kb.button(text="📊 Открыть в Telegram", web_app=WebAppInfo(url=f"{url}/panel"))
     text = "Кабинет открывается кнопкой ниже прямо в Telegram."
     if panel_key():
-        text += (f"\n\nДля компьютера — личная ссылка, никому не пересылай:\n<code>{url}/panel?key={panel_key()}</code>")
+        text += (f"\n\nДля компьютера — личная ссылка, никому не пересылай:\n<code>{url}/panel#key={panel_key()}</code>")
     await message.answer(text, reply_markup=kb.as_markup())
 
 
@@ -633,13 +633,22 @@ async def broadcast(message: Message, command: CommandObject, db: Database, sett
     await message.answer(f"Отправляю {len(targets)} пользователям…")
 
     async def job():
+        from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
         ok = 0
         for uid in targets:
-            try:
-                await message.bot.send_message(uid, text)
-                ok += 1
-            except Exception:
-                await db.mark_blocked_bot(uid)
+            for _ in range(3):
+                try:
+                    await message.bot.send_message(uid, text)
+                    ok += 1
+                    break
+                except TelegramRetryAfter as e:   # flood control — wait and retry, don't flag the user
+                    await asyncio.sleep(e.retry_after + 1)
+                except TelegramForbiddenError:    # only a real block/deactivation flags the user
+                    await db.mark_blocked_bot(uid)
+                    break
+                except Exception:
+                    log.warning("broadcast to %s failed", uid)
+                    break
             await asyncio.sleep(0.05)
         await message.answer(f"Рассылка завершена: доставлено {ok} из {len(targets)}.")
 

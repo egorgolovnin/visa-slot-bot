@@ -151,7 +151,9 @@ def validate(answers: dict) -> tuple[dict, list[str]]:
 
 
 async def handle_submission(bot: Bot, db, settings, payload: dict) -> dict:
-    if not secrets.compare_digest(str(payload.get("secret", "")), os.getenv("FORM_SECRET", "")):
+    configured = os.getenv("FORM_SECRET", "")
+    # Reject when the secret isn't configured — otherwise "" == "" would let anyone post orders.
+    if not configured or not secrets.compare_digest(str(payload.get("secret", "")), configured):
         return {"ok": False, "error": "bad secret"}
     answers = payload.get("answers") or {}
     data, errors = validate(answers)

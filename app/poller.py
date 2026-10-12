@@ -80,11 +80,14 @@ class Poller:
     async def watchdog(self) -> None:
         """Catches a wedged poller: the process is alive but cycles stopped completing.
         A full process crash is handled by Docker restart + the startup ping in main."""
-        stale_after = max(900, self.s.poll_interval * 4)  # seconds without a finished cycle
+        # Must sit above the worst-case HEALTHY gap: poll_interval * MAX_BACKOFF (+jitter) during 429 back-off,
+        # or the back-off itself would look like a hang.
+        stale_after = max(1800, self.s.poll_interval * (MAX_BACKOFF + 2))
         await asyncio.sleep(stale_after)
         while True:
             last = self.health.last_cycle_at
-            if last is not None:
+            # If run() is already alerting about a crash, don't double-report the same incident.
+            if last is not None and not self._crash_alerted:
                 age = (datetime.now(timezone.utc) - last).total_seconds()
                 if age > stale_after and not self._stall_alerted:
                     self._stall_alerted = True

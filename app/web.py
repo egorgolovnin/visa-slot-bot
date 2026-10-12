@@ -39,7 +39,7 @@ def panel_key() -> str | None:
     return os.getenv("PANEL_KEY") or None
 
 
-def verify_init_data(init_data: str, bot_token: str, max_age: int = 86400) -> dict | None:
+def verify_init_data(init_data: str, bot_token: str, max_age: int = 3600) -> dict | None:
     """Telegram Mini App signature check. Returns the user dict if valid."""
     try:
         pairs = dict(parse_qsl(init_data, strict_parsing=True))
@@ -203,9 +203,9 @@ def make_app(db: Database, settings: Settings, poller) -> web.Application:
             return web.json_response({"error": "unauthorized"}, status=401)
         try:
             return web.json_response(await collect(db, settings, poller), headers={"Cache-Control": "no-store"})
-        except Exception as e:
+        except Exception:
             log.exception("panel data")
-            return web.json_response({"error": str(e)[:200]}, status=500)
+            return web.json_response({"error": "internal error"}, status=500)
 
     async def health(_: web.Request) -> web.Response:
         return web.Response(text="ok")
@@ -230,9 +230,9 @@ def make_app(db: Database, settings: Settings, poller) -> web.Application:
         bot = request.app.get("bot")
         try:
             return web.json_response(await handle_submission(bot, db, settings, payload))
-        except Exception as e:
+        except Exception:
             log.exception("form hook")
-            return web.json_response({"ok": False, "error": str(e)[:200]}, status=500)
+            return web.json_response({"ok": False, "error": "internal error"}, status=500)
 
     app.router.add_post("/api/form", form_hook)
     app.router.add_get("/cases", cases_page)

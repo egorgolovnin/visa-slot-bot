@@ -154,14 +154,20 @@ if (tg && tg.initData) {
   tg.ready(); tg.expand();
   document.documentElement.dataset.theme = tg.colorScheme === "dark" ? "dark" : "light";
 }
-const params = new URLSearchParams(location.search);
-const key = params.get("key");
+// Read the admin key from the URL hash (not the query): the fragment is never sent to the
+// server or in Referer headers, and we wipe it from the address bar right after reading.
+// Fall back to ?key= for old links.
+const key = (location.hash.match(/key=([^&]+)/) || [])[1]
+  || new URLSearchParams(location.search).get("key");
+if (location.hash.includes("key=") || location.search.includes("key=")) {
+  try { history.replaceState(null, "", location.pathname); } catch (e) {}
+}
 const app = document.getElementById("app");
 let data = null, filter = "open", chart = null;
 
 const OPEN = ["awaiting_fee", "new", "in_progress", "booked", "paid"];
 const eur = v => (v == null ? "—" : new Intl.NumberFormat("ru-RU", { maximumFractionDigits: v % 1 ? 2 : 0 }).format(v) + " €");
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const d = iso => iso ? new Date(iso + (iso.length === 10 ? "T00:00:00" : "")) : null;
 const dmy = iso => iso ? d(iso).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }) : "";
 const dm = iso => iso ? d(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short" }) : "";
