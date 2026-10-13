@@ -177,7 +177,24 @@ class VfsPublicClient:
                 continue
             h = r.headers
             hint = " ".join(f"{k}={h.get(k)}" for k in ("cf-mitigated", "cf-ray", "content-type", "server") if h.get(k))
-            out.append(f"{profile}: {r.status_code} {(r.text or '')[:200]}\n   {hint}")
+            out.append(f"{profile}: {r.status_code} {(r.text or '')[:160]}\n   {hint}")
             if r.status_code == 200:
+                # Dump the JSON shape so we can confirm WHERE the availability lives and that
+                # the parser reads the right fields (totalVac=1 is "1 center exists", not "1 slot").
+                try:
+                    data = r.json()
+                    if isinstance(data, dict):
+                        out.append("  keys: " + ", ".join(list(data.keys())[:12]))
+                        vac = data.get("vacList") or []
+                        out.append(f"  vacList: {len(vac)} центр(ов)")
+                        if vac and isinstance(vac[0], dict):
+                            out.append("  vac[0] keys: " + ", ".join(vac[0].keys()))
+                            grp = vac[0].get("visaGroupList") or []
+                            out.append(f"  visaGroupList: {len(grp)}")
+                            if grp and isinstance(grp[0], dict):
+                                import json as _json
+                                out.append("  group[0]: " + _json.dumps(grp[0], ensure_ascii=False)[:400])
+                except Exception as e:
+                    out.append(f"  (json parse failed: {type(e).__name__})")
                 break
         return "\n".join(out)
