@@ -105,6 +105,7 @@ class VfsPublicClient:
         self.working_profile: str | None = None
         self._raw_logged: set[str] = set()
         self.last_age_min: int | None = None   # how old VFS's own cached data was, in minutes
+        self.first_group_sample: str | None = None  # raw JSON of the first populated slot group ever seen
 
     async def close(self) -> None:
         await self.session.close()
@@ -150,6 +151,15 @@ class VfsPublicClient:
                     log.info("raw %s: %s", mission, text[:1500])
                 self.last_age_min = data_age_minutes(data) if isinstance(data, dict) else None
                 if isinstance(data, dict) and data.get("vacList"):
+                    # Capture the first populated group we ever see, so the poller can show us the
+                    # real slot schema the moment a slot appears (confirms date field + format live).
+                    if self.first_group_sample is None:
+                        for vac in data["vacList"]:
+                            grp = (vac.get("visaGroupList") or []) if isinstance(vac, dict) else []
+                            if grp:
+                                import json as _json
+                                self.first_group_sample = _json.dumps(grp[0], ensure_ascii=False)[:600]
+                                break
                     return parse_response(code, data), str(data.get("lastUpdatedOn") or "")
                 raise NotOffered(text[:200])
             last = f"{r.status_code}: {text[:120]}"

@@ -69,6 +69,7 @@ class Poller:
         self._crash_alerted = False
         self._stall_alerted = False
         self._dateparse_alerted: set[str] = set()   # missions we've warned about an unparseable slot date
+        self._group_sample_sent = False             # one-time: show the first real slot's raw schema
 
     async def close(self) -> None:
         await self.client.close()
@@ -228,6 +229,18 @@ class Poller:
                     "Слоты по этой стране могут НЕ ловиться. Нужно добавить формат даты в парсер.")
             elif not unparsed:
                 self._dateparse_alerted.discard(code)
+            # One-time confirmation: the first time VFS ever returns a populated slot group,
+            # show its raw structure so we can verify live that the date was recognised.
+            if not self._group_sample_sent and getattr(self.client, "first_group_sample", None):
+                self._group_sample_sent = True
+                sample = self.client.first_group_sample
+                self.client.first_group_sample = None
+                got = sum(1 for x in slots if x.earliest)
+                await self.alert_admins(
+                    f"🔬 Впервые вижу заполненный слот от VFS ({html.escape(name)}).\n"
+                    f"Бот распознал дат: <b>{got}</b>.\nСырая структура группы:\n"
+                    f"<code>{html.escape(str(sample))}</code>\n\n"
+                    "Если дат 0, а в структуре дата есть — пришли это мне, поправим поле.")
             first_sight = not await self.db.was_fetched(code)
             changes = diff(await self.db.current(code), slots)
             await self.db.save_fetch(code, slots, changes, updated)
