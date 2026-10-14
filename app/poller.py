@@ -21,6 +21,7 @@ log = logging.getLogger("poller")
 Notify = Callable[[int, str], Awaitable[bool]]
 
 FAIL_ALERT_AFTER = 3          # failed checks in a row before admins hear about one country
+STALE_DATA_MIN = 360          # VFS data older than this (minutes) = its cache is frozen, "no slots" unreliable
 TRANSIENT_ALERT_AFTER = 6     # VFS's empty/1019/1020 answers come and go: wait ~1 hour before alerting
 MAX_BACKOFF = 6               # max multiplier of the VFS poll interval after 429s
 RK_COOLDOWN = 1800            # seconds to leave RK-Termin alone after a failed check
@@ -70,6 +71,7 @@ class Poller:
         self._stall_alerted = False
         self._dateparse_alerted: set[str] = set()   # missions we've warned about an unparseable slot date
         self._group_sample_sent = False             # one-time: show the first real slot's raw schema
+        self._stale_data_alerted: set[str] = set()  # missions whose VFS data went stale
 
     async def close(self) -> None:
         await self.client.close()
@@ -251,6 +253,17 @@ class Poller:
                 # "2026-11-12=09:00,09:30;2026-11-13=10:00"
                 times = ";".join(f"{d.isoformat()}={','.join(t)}" for d, t in sorted(self.rk.last_times.items()))
             age = self.client.last_age_min if is_vfs else None
+            # Independent liveness cross-check: VFS stamps every answer with how old its own data is.
+            # If that keeps growing, VFS froze its cache and our "нет слотов" would be reading stale
+            # data (not a real empty). Alert once per country so "пусто" is always trustworthy.
+            if is_vfs and age is not None:
+                if age > STALE_DATA_MIN and code not in self._stale_data_alerted:
+                    self._stale_data_alerted.add(code)
+                    await self.alert_admins(
+                        f"⚠️ {html.escape(name)}: VFS отдаёт <b>устаревшие</b> данные — обновлялись {age // 60} ч назад. "
+                        "«Нет слотов» по этой стране сейчас ненадёжно. Если так по всем — у VFS проблема с обновлением.")
+                elif age <= STALE_DATA_MIN:
+                    self._stale_data_alerted.discard(code)
             await self.db.add_observation(code, bool(dated), min(dated) if dated else None, n_dates, age, times)
             if not first_sight:
                 await self._announce(code, name, changes, updated)
