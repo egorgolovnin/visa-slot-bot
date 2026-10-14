@@ -81,6 +81,40 @@ class Poller:
         for uid in self.s.admin_targets:
             await self.notify(uid, text)
 
+    async def canary(self) -> None:
+        """Independent parser self-test: continuously fetch a route that reliably HAS slots.
+        Confirms the fetch->parse->date chain keeps working even when every Cyprus country is dry,
+        and pages us if VFS ever returns a date the parser can't read (a real parser bug)."""
+        route = self.s.canary_route
+        if not route:
+            return
+        await asyncio.sleep(90)
+        ok_announced = False
+        bug_alerted = False
+        while True:
+            try:
+                slots, _ = await self.client.fetch(route)
+                dated = [s for s in slots if s.earliest]
+                unparsed = [s.raw_date for s in slots if s.raw_date and not s.earliest]
+                if unparsed:
+                    if not bug_alerted:
+                        bug_alerted = True
+                        await self.alert_admins(
+                            f"🐤⚠️ Канарейка {route}: VFS отдал дату, которую парсер НЕ разобрал — "
+                            f"<code>{html.escape(str(unparsed[0])[:40])}</code>. Это баг парсера, чини формат.")
+                else:
+                    bug_alerted = False
+                    if dated and not ok_announced:
+                        ok_announced = True
+                        await self.alert_admins(
+                            f"🐤 Канарейка {route}: парсер разобрал {len(dated)} дат на живых данных "
+                            f"(ближайшая {dated[0].earliest.isoformat()}) — ловля слотов исправна ✅")
+            except (Blocked, NotOffered):
+                pass  # route blocked/invalid or currently empty — not a parser problem
+            except Exception as e:
+                log.info("canary %s: %s", route, type(e).__name__)
+            await asyncio.sleep(max(900, self.s.poll_interval * 2))
+
     async def watchdog(self) -> None:
         """Catches a wedged poller: the process is alive but cycles stopped completing.
         A full process crash is handled by Docker restart + the startup ping in main."""

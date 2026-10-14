@@ -30,6 +30,7 @@ class Settings:
     pdf_after_payment: bool     # True: the booking PDF is sent only once the invoice is paid
     max_order_countries: int    # how many countries one person can have open orders for at once
     docs_price: float = 250.0   # EUR for "we prepare the whole document package"
+    canary_route: str | None = None  # a VFS route that reliably HAS slots (e.g. "are-fra") — parser self-test
 
     @property
     def admin_targets(self) -> tuple[int, ...]:
@@ -69,4 +70,5 @@ def load() -> Settings:
         pdf_after_payment=os.getenv("PDF_AFTER_PAYMENT", "true").lower() in ("1", "true", "yes"),
         max_order_countries=int(os.getenv("MAX_ORDER_COUNTRIES", "2")),
         docs_price=float(os.getenv("DOCS_PRICE_EUR", "250")),
+        canary_route=(os.getenv("CANARY_ROUTE", "").strip().lower() or None),
     )

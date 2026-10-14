@@ -103,6 +103,7 @@ async def main() -> None:
     web_runner = await web.start(db, settings, poller, bot)
     task = asyncio.create_task(poller.run())
     wd_task = asyncio.create_task(poller.watchdog())
+    canary_task = asyncio.create_task(poller.canary())
     pay_task = asyncio.create_task(orders.payment_watcher(bot, db, settings))
     try:
         await alert_admins("🔄 Easy Visa запущен. Если это не плановый деплой — бот перезапускался сам (падал).")
@@ -113,6 +114,7 @@ async def main() -> None:
     finally:
         task.cancel()
         wd_task.cancel()
+        canary_task.cancel()
         if web_runner:
             await web_runner.cleanup()
         pay_task.cancel()
