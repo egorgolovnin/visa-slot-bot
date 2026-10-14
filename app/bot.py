@@ -53,6 +53,7 @@ ADMIN_COMMANDS = [
     ("capsolver", "Проверить Capsolver: баланс+sitekey"),
     ("slotprobe", "Разведка эндпоинтов слотов"),
     ("monprobe", "Сырой ответ поиска слотов: /monprobe aut"),
+    ("calprobe", "Тест реалтайм-календаря через браузер: /calprobe aut"),
     ("rkform", "Германия: показать форму записи"),
 ]
 
@@ -818,6 +819,43 @@ async def monprobe(message: Message, command: CommandObject, poller: Poller, set
     except Exception as e:
         await message.answer(f"Парсинг/запрос вернул: <code>{html.escape(str(e))[:300]}</code> "
                              "(NotOffered/Blocked здесь — это норма, если VFS временно пустой)")
+
+
+@router.message(Command("calprobe"))
+async def calprobe(message: Message, command: CommandObject, poller: Poller, settings: Settings) -> None:
+    """Decisive real-time test: browser-login, then call the availability endpoints from inside the
+    browser session (which passed Cloudflare). 200 here = real-time monitoring is viable."""
+    if not await admin_only(message, settings):
+        return
+    mission = (command.args or "aut").strip().lower()
+    from . import vfs_auth, vfs_browser
+    if not vfs_browser.available():
+        await message.answer("Браузер (Camoufox) недоступен в этой сборке.")
+        return
+    accs = vfs_auth.accounts()
+    if not accs:
+        await message.answer("Нет VFS-аккаунтов (VFS_ACCOUNTS в .env).")
+        return
+    email, pwd = accs[0]
+    await message.answer(f"🧪 Браузерный логин в VFS ({mission}) + реалтайм-календарь изнутри сессии… (до 1–2 мин)")
+    try:
+        data = await vfs_browser.login("cyp", mission, email, pwd, proxy=settings.proxy_url, calendar_probe=True)
+    except Exception as e:
+        await message.answer(f"Ошибка: <code>{html.escape(str(e))[:300]}</code>")
+        return
+    if not data:
+        await message.answer("Логин не прошёл (нет токена). Детали — в логах (last_login.png/html).")
+        return
+    probe = data.get("calendar_probe") or {}
+    lines = ["✅ Логин прошёл. Реалтайм-эндпоинты VFS изнутри браузера:"]
+    for path, res in probe.items():
+        name = path.split("/")[-1]
+        if "error" in res:
+            lines.append(f"• {name}: ERROR {html.escape(str(res['error'])[:150])}")
+        else:
+            body = html.escape(str(res.get("body", ""))[:700])
+            lines.append(f"• {name}: <b>{res.get('status')}</b>\n<code>{body}</code>")
+    await message.answer("\n".join(lines)[:4000])
 
 
 @router.message(Command("rkform"))

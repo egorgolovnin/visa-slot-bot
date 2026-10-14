@@ -109,8 +109,10 @@ async def sitekey_via_browser(country: str, mission: str, proxy: str | None = No
 
 
 async def login(country: str, mission: str, email: str, password: str, proxy: str | None = None,
-                timeout: int = 90) -> dict | None:
-    """Returns {'token': str, 'cookies': {...}, 'user_agent': str} or None. Runs the whole browser login."""
+                timeout: int = 90, calendar_probe: bool = False) -> dict | None:
+    """Returns {'token': str, 'cookies': {...}, 'user_agent': str} or None. Runs the whole browser login.
+    With calendar_probe=True, also calls the real-time availability endpoints from INSIDE the browser
+    (which already passed Cloudflare) and attaches the raw responses under 'calendar_probe'."""
     from camoufox.async_api import AsyncCamoufox
     STEPS.clear()
     def step(m): STEPS.append(m); log.info("vfs_browser STEP: %s", m)
@@ -316,7 +318,13 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
         if token:
             await page.context.storage_state(path=str(state_file))
             step("✅ токен получен")
-            return {"token": token, "cookies": cookies, "user_agent": ua}
+            out = {"token": token, "cookies": cookies, "user_agent": ua}
+            if calendar_probe:
+                try:
+                    out["calendar_probe"] = await _probe_calendar_in_page(page, country, mission, token)
+                except Exception as e:
+                    out["calendar_probe"] = {"error": f"{type(e).__name__}: {e}"}
+            return out
         try:
             body = await page.content()
             STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -327,6 +335,43 @@ async def login(country: str, mission: str, email: str, password: str, proxy: st
         snippet = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body))[:400]
         log.warning("VFS browser login: no token. visible text: %s", snippet)
         return None
+
+
+async def _probe_calendar_in_page(page, country: str, mission: str, token: str) -> dict:
+    """Call the real-time availability endpoints FROM the browser page (same session that passed
+    Cloudflare, same TLS/fingerprint as the real SPA). This is the decisive test: if lift-api answers
+    200 here but 403102 over plain HTTP, real-time monitoring is viable via the browser session."""
+    from .vfs_auth import clientsource
+    calls = [
+        ["appointment/calendar",
+         {"countryCode": country, "missionCode": mission, "centerCode": "", "visaCategoryCode": "",
+          "visaSubCategoryCode": "", "payCode": "", "roleName": "Individual"}],
+        ["appointment/CheckIsSlotAvailable",
+         {"countryCode": country, "missionCode": mission, "loginUser": "", "payCode": "", "urn": "",
+          "vacCode": "", "roleName": "Individual", "loadForFamily": False}],
+    ]
+    js = """async (args) => {
+        const out = {};
+        for (const [path, payload] of args.calls) {
+            try {
+                const r = await fetch('https://lift-api.vfsglobal.com/' + path, {
+                    method: 'POST', credentials: 'include',
+                    headers: {
+                        'accept': 'application/json, text/plain, */*',
+                        'content-type': 'application/json',
+                        'authorize': args.token, 'authorization': args.token,
+                        'route': args.route, 'clientsource': args.clientsource, 'cfmlift': 'mobile',
+                    },
+                    body: JSON.stringify(payload),
+                });
+                const t = await r.text();
+                out[path] = { status: r.status, body: t.slice(0, 1800) };
+            } catch (e) { out[path] = { error: String(e) }; }
+        }
+        return out;
+    }"""
+    return await page.evaluate(js, {"token": token, "route": f"{country}/en/{mission}",
+                                    "clientsource": clientsource(), "calls": calls})
 
 
 async def _click_turnstile(page) -> None:
