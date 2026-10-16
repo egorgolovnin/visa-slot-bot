@@ -291,10 +291,13 @@ class RkTerminClient:
 
             if not days and NO_SLOTS not in page:
                 log.info("rktermin page without days: %s", re.sub(r"\s+", " ", page)[:1200])
-            earliest = days[0] if days else None
             self.last_free_days = len(days)
-            slot = Slot("deu", CENTRE, CATEGORY, earliest, earliest.isoformat() if earliest else "")
+            # One Slot PER free day so the pipeline treats every date as its own slot: a newly-appeared
+            # date (even one LATER than the current earliest) fires OPENED, a consumed date fires CLOSED.
+            # The date is encoded into `category` because slots are keyed on (centre, category).
+            slots = [Slot("deu", CENTRE, f"{CATEGORY} · {d.strftime('%d.%m.%Y')}", d, d.isoformat()) for d in days]
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
             log.info("rktermin: %d free days, earliest=%s, months checked=%d, times=%s",
-                     len(days), earliest, seen_months, {d.isoformat(): t for d, t in self.last_times.items()})
-            return [slot], stamp
+                     len(days), days[0] if days else None, seen_months,
+                     {d.isoformat(): t for d, t in self.last_times.items()})
+            return slots, stamp

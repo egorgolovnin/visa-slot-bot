@@ -371,6 +371,8 @@ class Poller:
     async def _announce(self, code: str, name: str, changes: list[Change], updated: str) -> None:
         now = datetime.now(timezone.utc)
         c_country, c_total = await self.db.catch_counts(code)  # incl. the catches just saved this cycle
+        # keep only notify-worthy changes we haven't just alerted on (throttle per date)
+        fire: list[Change] = []
         for ch in changes:
             if ch.kind not in NOTIFY_KINDS or not ch.slot.earliest:
                 continue
@@ -380,6 +382,22 @@ class Poller:
                 log.info("skip repeated alert %s", key)
                 continue
             self._last_alert[key] = now
+            fire.append(ch)
+        if not fire:
+            return
+        # Many dates at once (RK when a whole month unlocks): one compact message, not a flood of N.
+        if len(fire) > 6:
+            dates = sorted({ch.slot.earliest for ch in fire})
+            shown = ", ".join(fmt_date(d) for d in dates[:40])
+            more = f" и ещё {len(dates) - 40}" if len(dates) > 40 else ""
+            await self.alert_admins(
+                f"🟢 <b>{html.escape(name)}</b>: открылось дат — <b>{len(dates)}</b>\n"
+                f"{shown}{more}\n"
+                f"📈 Поймано слотов: {html.escape(name)} — {c_country}, всего по всем странам — {c_total}\n"
+                f"{self.page_url(code)}")
+            log.info("alert %s batch %d dates -> admins", code, len(dates))
+            return
+        for ch in fire:
             head = "🟢 Появился слот" if ch.kind == OPENED else "⏫ Слот стал раньше"
             was = f" (было {fmt_date(ch.old)})" if ch.kind == EARLIER else ""
             waiting = [o for o in await self.db.active_orders_for(code)
