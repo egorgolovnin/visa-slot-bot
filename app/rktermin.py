@@ -126,6 +126,8 @@ class RkTerminClient:
         self.category_id: str | None = os.getenv("RK_CATEGORY_ID") or "1955"
         self.last_free_days = 0
         self.last_times: dict[date, list[str]] = {}
+        self.new_times: dict[date, list[str]] = {}   # times that appeared on an ALREADY-open day this cycle
+        self._times_at: dict[date, float] = {}       # when each day's times were last read (for round-robin refresh)
         self._day_logged = False
         self.form_report: str | None = None    # filled once, when the booking form is first seen
         self._form_probed = False
@@ -197,17 +199,21 @@ class RkTerminClient:
         return text
 
     async def _read_times(self, s: AsyncSession, hrefs: dict[date, str], days: list[date]) -> dict[date, list[str]]:
-        """Read appointment times (e.g. 09:00, 09:30) per free day, cached across cycles: open a day
-        page only for days we don't have yet, capped at RK_TIME_BUDGET per cycle so a whole-month
-        unlock doesn't hammer diplo — the remaining new days are picked up over the next cycles."""
-        cache = {d: t for d, t in self.last_times.items() if d in set(days)}  # keep only still-free days
-        budget = RK_TIME_BUDGET
-        for d in days:
-            if d in cache or d not in hrefs:
-                continue
-            if budget <= 0:
-                break
-            budget -= 1
+        """Read appointment times (e.g. 09:00, 09:30) per free day and REFRESH them across cycles so a
+        new time appearing on an already-open day is caught. We don't re-read every day every cycle
+        (that would hammer diplo) — each cycle we (re)read at most RK_TIME_BUDGET day pages, picking
+        never-read days first, then the ones read longest ago (round-robin). Times added on a day we
+        already knew are recorded in self.new_times for the poller to alert on."""
+        import time as _time
+        days_set = set(days)
+        prev = {d: t for d, t in self.last_times.items() if d in days_set}   # carry over still-free days
+        self._times_at = {d: ts for d, ts in self._times_at.items() if d in days_set}
+        now = _time.time()
+        # priority: never-read days (ts 0) first, then stale ones (oldest read first)
+        candidates = sorted((d for d in days if d in hrefs), key=lambda d: self._times_at.get(d, 0.0))
+        cache = dict(prev)
+        new_times: dict[date, list[str]] = {}
+        for d in candidates[:RK_TIME_BUDGET]:
             await asyncio.sleep(random.uniform(1.5, 3))
             try:
                 page = await self._get(s, urljoin("https://service2.diplo.de/rktermin/", hrefs[d]))
@@ -220,6 +226,9 @@ class RkTerminClient:
             links = re.findall(r"<a[^>]*appointment_showForm[^>]*>(.*?)</a>", page, re.S | re.I)
             source = " ".join(links) if links else re.sub(r"<[^>]+>", " ", page)
             times = sorted({f"{int(h):02d}:{mi}" for h, mi in TIME_RE.findall(source) if 6 <= int(h) <= 19})
+            added = sorted(set(times) - set(prev.get(d, [])))
+            if d in prev and added:   # a brand-new DAY is handled by the date-open alert, not here
+                new_times[d] = added
             if not self._form_probed:
                 await self._probe_form(s, page)
             if not self._day_logged:
@@ -227,6 +236,8 @@ class RkTerminClient:
                 log.info("day page sample %s: links=%d times=%s text=%s", d, len(links), times,
                          re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", page))[:800])
             cache[d] = times
+            self._times_at[d] = now
+        self.new_times = new_times
         return cache
 
     async def _probe_form(self, s: AsyncSession, day_page: str) -> None:

@@ -317,6 +317,11 @@ class Poller:
         await self.db.add_observation(code, bool(dated), min(dated) if dated else None, n_dates, age, times)
         if not first_sight:
             await self._announce(code, name, changes, updated)
+        # New times appearing on an already-open day aren't a date change (no diff event), so alert here.
+        if code in RK_MISSIONS and getattr(self.rk, "new_times", None) and not first_sight:
+            lines = "\n".join(f"{fmt_date(d)}: {', '.join(ts)}" for d, ts in sorted(self.rk.new_times.items()))
+            await self.alert_admins(f"⏰ <b>{html.escape(name)}</b>: новое время на уже открытых днях\n"
+                                    f"{lines}\n{self.page_url(code)}")
         await self._recovered(code, name)
         return "ok"
 
