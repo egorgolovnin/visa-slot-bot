@@ -40,7 +40,7 @@ ATTR_RE = re.compile(r"(\w+)=\"([^\"]*)\"")
 DAY_RE = re.compile(r"appointment_showDay\.do[^\"']*?dateStr=(\d{2}\.\d{2}\.\d{4})")
 DAY_HREF_RE = re.compile(r"href=\"([^\"]*appointment_showDay\.do[^\"]*dateStr=(\d{2}\.\d{2}\.\d{4})[^\"]*)\"")
 TIME_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
-DAYS_WITH_TIMES = int(os.getenv("RK_DAYS_WITH_TIMES", "10"))  # open at most this many day pages per check to read free times
+RK_TIME_BUDGET = int(os.getenv("RK_TIME_BUDGET", "12"))  # max NEW day-pages to open per cycle for times (rest cached)
 NEXT_MONTH_RE = re.compile(r"href=\"([^\"]*appointment_showMonth\.do[^\"]*dateStr=(\d{2}\.\d{2}\.\d{4})[^\"]*)\"")
 CATEGORY_RE = re.compile(r"categoryId=(\d+)")
 
@@ -196,16 +196,18 @@ class RkTerminClient:
             return ""
         return text
 
-    async def _read_times(self, s: AsyncSession, month_page: str, days: list[date]) -> dict[date, list[str]]:
-        """Open the first few free days and read their appointment times (e.g. 09:00, 09:30)."""
-        hrefs = {}
-        for m in DAY_HREF_RE.finditer(month_page):
-            d = datetime.strptime(m.group(2), "%d.%m.%Y").date()
-            hrefs.setdefault(d, htmllib.unescape(m.group(1)))
-        out: dict[date, list[str]] = {}
-        for d in days[:DAYS_WITH_TIMES]:
-            if d not in hrefs:
+    async def _read_times(self, s: AsyncSession, hrefs: dict[date, str], days: list[date]) -> dict[date, list[str]]:
+        """Read appointment times (e.g. 09:00, 09:30) per free day, cached across cycles: open a day
+        page only for days we don't have yet, capped at RK_TIME_BUDGET per cycle so a whole-month
+        unlock doesn't hammer diplo — the remaining new days are picked up over the next cycles."""
+        cache = {d: t for d, t in self.last_times.items() if d in set(days)}  # keep only still-free days
+        budget = RK_TIME_BUDGET
+        for d in days:
+            if d in cache or d not in hrefs:
                 continue
+            if budget <= 0:
+                break
+            budget -= 1
             await asyncio.sleep(random.uniform(1.5, 3))
             try:
                 page = await self._get(s, urljoin("https://service2.diplo.de/rktermin/", hrefs[d]))
@@ -224,8 +226,8 @@ class RkTerminClient:
                 self._day_logged = True
                 log.info("day page sample %s: links=%d times=%s text=%s", d, len(links), times,
                          re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", page))[:800])
-            out[d] = times
-        return out
+            cache[d] = times
+        return cache
 
     async def _probe_form(self, s: AsyncSession, day_page: str) -> None:
         """Open (never submit) the booking form behind the first free time and record its fields."""
@@ -272,32 +274,38 @@ class RkTerminClient:
             if not page:
                 raise Blocked(f"rktermin: captcha not solved in {MAX_CAPTCHA_TRIES} tries")
 
-            days = parse_days(page)
-            seen_months = 1
-            while not days and seen_months < MONTHS_AHEAD:
+            # Walk up to MONTHS_AHEAD months and COLLECT every free day across the whole window
+            # (plus each day's link, to open it for the times) — don't stop at the first non-empty month.
+            days: set[date] = set()
+            hrefs: dict[date, str] = {}
+            months_seen = 0
+            while months_seen < MONTHS_AHEAD:
+                months_seen += 1
+                days.update(parse_days(page))
+                for m in DAY_HREF_RE.finditer(page):
+                    dd = datetime.strptime(m.group(2), "%d.%m.%Y").date()
+                    hrefs.setdefault(dd, htmllib.unescape(m.group(1)))
                 nxt = [m for m in NEXT_MONTH_RE.finditer(page)]
-                if not nxt:
+                if not nxt or months_seen >= MONTHS_AHEAD:
                     break
-                href = htmllib.unescape(nxt[-1].group(1))
-                url = urljoin("https://service2.diplo.de/rktermin/", href)
+                url = urljoin("https://service2.diplo.de/rktermin/", htmllib.unescape(nxt[-1].group(1)))
                 await asyncio.sleep(random.uniform(1.5, 3))
                 page = await self._get(s, url)
                 if CAPTCHA_RE.search(page):
-                    break  # session asks for a new captcha; stop here
-                days = parse_days(page)
-                seen_months += 1
+                    break  # session wants a fresh captcha; stop walking, keep what we already collected
 
-            self.last_times = await self._read_times(s, page, days) if days else {}
+            day_list = sorted(days)
+            self.last_times = await self._read_times(s, hrefs, day_list) if day_list else {}
 
-            if not days and NO_SLOTS not in page:
-                log.info("rktermin page without days: %s", re.sub(r"\s+", " ", page)[:1200])
-            self.last_free_days = len(days)
+            if not day_list:
+                log.info("rktermin: no free days across %d month(s)", months_seen)
+            self.last_free_days = len(day_list)
             # One Slot PER free day so the pipeline treats every date as its own slot: a newly-appeared
             # date (even one LATER than the current earliest) fires OPENED, a consumed date fires CLOSED.
             # The date is encoded into `category` because slots are keyed on (centre, category).
-            slots = [Slot("deu", CENTRE, f"{CATEGORY} · {d.strftime('%d.%m.%Y')}", d, d.isoformat()) for d in days]
+            slots = [Slot("deu", CENTRE, f"{CATEGORY} · {d.strftime('%d.%m.%Y')}", d, d.isoformat()) for d in day_list]
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            log.info("rktermin: %d free days, earliest=%s, months checked=%d, times=%s",
-                     len(days), days[0] if days else None, seen_months,
+            log.info("rktermin: %d free days across %d month(s), earliest=%s, times=%s",
+                     len(day_list), months_seen, day_list[0] if day_list else None,
                      {d.isoformat(): t for d, t in self.last_times.items()})
             return slots, stamp
