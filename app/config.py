@@ -31,6 +31,8 @@ class Settings:
     max_order_countries: int    # how many countries one person can have open orders for at once
     docs_price: float = 250.0   # EUR for "we prepare the whole document package"
     canary_route: str | None = None  # a VFS route that reliably HAS slots (e.g. "are-fra") — parser self-test
+    rk_fast: bool = True        # Germany (RK-Termin) has no login/VFS limit: poll it in its own tight loop
+    rk_fast_interval: int = 30  # seconds to idle between RK-Termin checks in the fast loop (fetch itself ~35s)
 
     @property
     def admin_targets(self) -> tuple[int, ...]:
@@ -71,4 +73,6 @@ def load() -> Settings:
         max_order_countries=int(os.getenv("MAX_ORDER_COUNTRIES", "2")),
         docs_price=float(os.getenv("DOCS_PRICE_EUR", "250")),
         canary_route=(os.getenv("CANARY_ROUTE", "").strip().lower() or None),
+        rk_fast=os.getenv("RK_FAST", "true").lower() in ("1", "true", "yes"),
+        rk_fast_interval=int(os.getenv("RK_FAST_INTERVAL_SEC", "30")),
     )

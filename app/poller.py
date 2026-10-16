@@ -217,6 +217,8 @@ class Poller:
         now = datetime.now(timezone.utc)
         vfs_paused = False
         for code, name in missions:
+            if code in RK_MISSIONS and self.s.rk_fast:
+                continue  # the dedicated fast loop owns Germany — don't double-poll it in the slow cycle
             if code in RK_MISSIONS and self.rk_resume_at and now < self.rk_resume_at:
                 continue
             if "-" in code and (not ABROAD_ON or self._cycle_no % ABROAD_EVERY):
@@ -224,90 +226,128 @@ class Poller:
             is_vfs = code not in RK_MISSIONS and code not in SS_MISSIONS
             if is_vfs and vfs_paused:
                 continue
-            try:
-                slots, updated = await self.fetch(code)
-            except RateLimited as e:
-                # a VFS 429 pauses only the other VFS countries, not Germany/Greece
-                self.health.backoff = min(self.health.backoff * 2, MAX_BACKOFF)
-                vfs_paused = True
-                await self._failed(code, name, f"429: {e}")
-                continue
-            except NotOffered as e:
-                # mid-cycle this is VFS's transient empty/1019/1020 answer: never disable a country here
-                await self._failed(code, name, str(e), threshold=TRANSIENT_ALERT_AFTER)
-                continue
-            except Blocked as e:
-                if code in RK_MISSIONS:
-                    self.rk_resume_at = now + timedelta(seconds=RK_COOLDOWN)
-                await self._failed(code, name, str(e))
-                continue
-            except Exception as e:  # one country must never break the whole cycle
-                log.exception("unexpected error on %s", code)
-                await self._failed(code, name, f"{type(e).__name__}: {e}")
-                continue
-
-            if code in RK_MISSIONS:
-                self.rk_resume_at = None
-                if self.rk.form_report:
-                    report, self.rk.form_report = self.rk.form_report, None
-                    await self.alert_admins("🔍 Германия: впервые увидел форму записи, ничего не отправлял.\n"
-                                            + html.escape(report) + "\n\nПерешли это в чат с разработкой — допишем автобронь.")
-            log.info("%s: %d pairs, %d with dates, updated=%s", code, len(slots),
-                     sum(1 for x in slots if x.earliest), updated)
-            # Silent-miss guard: VFS returned a date string we couldn't parse -> the slot would be
-            # treated as "none" and never announced. Page the admin once instead of dropping it.
-            unparsed = [s.raw_date for s in slots if s.raw_date and not s.earliest]
-            if unparsed and code not in self._dateparse_alerted:
-                self._dateparse_alerted.add(code)
-                await self.alert_admins(
-                    f"⚠️ {html.escape(name)}: пришла дата слота, которую бот не смог разобрать — "
-                    f"<code>{html.escape(str(unparsed[0])[:40])}</code>.\n"
-                    "Слоты по этой стране могут НЕ ловиться. Нужно добавить формат даты в парсер.")
-            elif not unparsed:
-                self._dateparse_alerted.discard(code)
-            # One-time confirmation: the first time VFS ever returns a populated slot group,
-            # show its raw structure so we can verify live that the date was recognised.
-            if not self._group_sample_sent and getattr(self.client, "first_group_sample", None):
-                self._group_sample_sent = True
-                sample = self.client.first_group_sample
-                self.client.first_group_sample = None
-                got = sum(1 for x in slots if x.earliest)
-                await self.alert_admins(
-                    f"🔬 Впервые вижу заполненный слот от VFS ({html.escape(name)}).\n"
-                    f"Бот распознал дат: <b>{got}</b>.\nСырая структура группы:\n"
-                    f"<code>{html.escape(str(sample))}</code>\n\n"
-                    "Если дат 0, а в структуре дата есть — пришли это мне, поправим поле.")
-            first_sight = not await self.db.was_fetched(code)
-            changes = diff(await self.db.current(code), slots)
-            await self.db.save_fetch(code, slots, changes, updated)
-            dated = [x.earliest for x in slots if x.earliest]
-            n_dates = self.rk.last_free_days if code in RK_MISSIONS else len(dated)
-            times = None
-            if code in RK_MISSIONS and self.rk.last_times:
-                # "2026-11-12=09:00,09:30;2026-11-13=10:00"
-                times = ";".join(f"{d.isoformat()}={','.join(t)}" for d, t in sorted(self.rk.last_times.items()))
-            age = self.client.last_age_min if is_vfs else None
-            # Independent liveness cross-check: VFS stamps every answer with how old its own data is.
-            # If that keeps growing, VFS froze its cache and our "нет слотов" would be reading stale
-            # data (not a real empty). Alert once per country so "пусто" is always trustworthy.
-            if is_vfs and age is not None:
-                if age > STALE_DATA_MIN and code not in self._stale_data_alerted:
-                    self._stale_data_alerted.add(code)
-                    await self.alert_admins(
-                        f"⚠️ {html.escape(name)}: VFS отдаёт <b>устаревшие</b> данные — обновлялись {age // 60} ч назад. "
-                        "«Нет слотов» по этой стране сейчас ненадёжно. Если так по всем — у VFS проблема с обновлением.")
-                elif age <= STALE_DATA_MIN:
-                    self._stale_data_alerted.discard(code)
-            await self.db.add_observation(code, bool(dated), min(dated) if dated else None, n_dates, age, times)
-            if not first_sight:
-                await self._announce(code, name, changes, updated)
-            await self._recovered(code, name)
-            if is_vfs:
+            status = await self._poll_mission(code, name)
+            if status == "ratelimited":
+                vfs_paused = True  # a VFS 429 pauses only the other VFS countries, not Germany/Greece
+            elif status == "ok" and is_vfs:
                 await asyncio.sleep(random.uniform(2, 5))
 
         if not vfs_paused:
             self.health.backoff = 1
         self.health.last_cycle_at = datetime.now(timezone.utc)
+
+    async def _poll_mission(self, code: str, name: str) -> str:
+        """Fetch one mission and run the full process + announce path. Returns one of
+        'ok' | 'ratelimited' | 'notoffered' | 'blocked' | 'error'. Shared by the slow all-missions
+        cycle and the dedicated fast RK-Termin loop so both notify through exactly the same path."""
+        now = datetime.now(timezone.utc)
+        try:
+            slots, updated = await self.fetch(code)
+        except RateLimited as e:
+            self.health.backoff = min(self.health.backoff * 2, MAX_BACKOFF)
+            await self._failed(code, name, f"429: {e}")
+            return "ratelimited"
+        except NotOffered as e:
+            # mid-cycle this is VFS's transient empty/1019/1020 answer: never disable a country here
+            await self._failed(code, name, str(e), threshold=TRANSIENT_ALERT_AFTER)
+            return "notoffered"
+        except Blocked as e:
+            if code in RK_MISSIONS:
+                self.rk_resume_at = now + timedelta(seconds=RK_COOLDOWN)
+            await self._failed(code, name, str(e))
+            return "blocked"
+        except Exception as e:  # one country must never break the whole cycle
+            log.exception("unexpected error on %s", code)
+            await self._failed(code, name, f"{type(e).__name__}: {e}")
+            return "error"
+
+        is_vfs = code not in RK_MISSIONS and code not in SS_MISSIONS
+        if code in RK_MISSIONS:
+            self.rk_resume_at = None
+            if self.rk.form_report:
+                report, self.rk.form_report = self.rk.form_report, None
+                await self.alert_admins("🔍 Германия: впервые увидел форму записи, ничего не отправлял.\n"
+                                        + html.escape(report) + "\n\nПерешли это в чат с разработкой — допишем автобронь.")
+        log.info("%s: %d pairs, %d with dates, updated=%s", code, len(slots),
+                 sum(1 for x in slots if x.earliest), updated)
+        # Silent-miss guard: VFS returned a date string we couldn't parse -> the slot would be
+        # treated as "none" and never announced. Page the admin once instead of dropping it.
+        unparsed = [s.raw_date for s in slots if s.raw_date and not s.earliest]
+        if unparsed and code not in self._dateparse_alerted:
+            self._dateparse_alerted.add(code)
+            await self.alert_admins(
+                f"⚠️ {html.escape(name)}: пришла дата слота, которую бот не смог разобрать — "
+                f"<code>{html.escape(str(unparsed[0])[:40])}</code>.\n"
+                "Слоты по этой стране могут НЕ ловиться. Нужно добавить формат даты в парсер.")
+        elif not unparsed:
+            self._dateparse_alerted.discard(code)
+        # One-time confirmation: the first time VFS ever returns a populated slot group,
+        # show its raw structure so we can verify live that the date was recognised.
+        if not self._group_sample_sent and getattr(self.client, "first_group_sample", None):
+            self._group_sample_sent = True
+            sample = self.client.first_group_sample
+            self.client.first_group_sample = None
+            got = sum(1 for x in slots if x.earliest)
+            await self.alert_admins(
+                f"🔬 Впервые вижу заполненный слот от VFS ({html.escape(name)}).\n"
+                f"Бот распознал дат: <b>{got}</b>.\nСырая структура группы:\n"
+                f"<code>{html.escape(str(sample))}</code>\n\n"
+                "Если дат 0, а в структуре дата есть — пришли это мне, поправим поле.")
+        first_sight = not await self.db.was_fetched(code)
+        changes = diff(await self.db.current(code), slots)
+        await self.db.save_fetch(code, slots, changes, updated)
+        dated = [x.earliest for x in slots if x.earliest]
+        n_dates = self.rk.last_free_days if code in RK_MISSIONS else len(dated)
+        times = None
+        if code in RK_MISSIONS and self.rk.last_times:
+            # "2026-11-12=09:00,09:30;2026-11-13=10:00"
+            times = ";".join(f"{d.isoformat()}={','.join(t)}" for d, t in sorted(self.rk.last_times.items()))
+        age = self.client.last_age_min if is_vfs else None
+        # Independent liveness cross-check: VFS stamps every answer with how old its own data is.
+        # If that keeps growing, VFS froze its cache and our "нет слотов" would be reading stale
+        # data (not a real empty). Alert once per country so "пусто" is always trustworthy.
+        if is_vfs and age is not None:
+            if age > STALE_DATA_MIN and code not in self._stale_data_alerted:
+                self._stale_data_alerted.add(code)
+                await self.alert_admins(
+                    f"⚠️ {html.escape(name)}: VFS отдаёт <b>устаревшие</b> данные — обновлялись {age // 60} ч назад. "
+                    "«Нет слотов» по этой стране сейчас ненадёжно. Если так по всем — у VFS проблема с обновлением.")
+            elif age <= STALE_DATA_MIN:
+                self._stale_data_alerted.discard(code)
+        await self.db.add_observation(code, bool(dated), min(dated) if dated else None, n_dates, age, times)
+        if not first_sight:
+            await self._announce(code, name, changes, updated)
+        await self._recovered(code, name)
+        return "ok"
+
+    async def rk_fast_loop(self) -> None:
+        """Dedicated tight loop for RK-Termin (Germany +NL/BE/DK/NO/IS/LU). It needs no login and is
+        not subject to the VFS rate-limit, so we re-check it far more often than the 10-min VFS cycle
+        and catch a slot the moment it appears. Gap between checks = RK_FAST_INTERVAL_SEC (the fetch
+        itself takes ~35s); on a block/captcha-miss it backs off progressively, then resumes fast."""
+        if not self.s.rk_fast:
+            return
+        code = next(iter(RK_MISSIONS))
+        name = RK_MISSIONS[code]
+        await self.db.set_mission(code, name, True)
+        await asyncio.sleep(25)  # let startup/discovery settle before the first hit
+        log.info("RK fast loop ON: %s every ~%ds", code, self.s.rk_fast_interval)
+        fails = 0
+        while True:
+            try:
+                status = await self._poll_mission(code, name)
+            except Exception:
+                log.exception("rk fast loop iteration")
+                status = "error"
+            if status == "ok":
+                fails = 0
+                delay = max(5, self.s.rk_fast_interval) * random.uniform(0.8, 1.2)
+            else:
+                # captcha miss / 403 / network: back off so we don't hammer a block, then speed back up
+                fails = min(fails + 1, 6)
+                self.rk_resume_at = None  # fast loop manages its own backoff; drop the slow-cycle cooldown
+                delay = min(RK_COOLDOWN, max(30, self.s.rk_fast_interval) * (2 ** fails))
+            await asyncio.sleep(delay)
 
     async def _failed(self, code: str, name: str, error: str, threshold: int = FAIL_ALERT_AFTER) -> None:
         h = self.health
