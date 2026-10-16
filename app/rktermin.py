@@ -40,7 +40,7 @@ ATTR_RE = re.compile(r"(\w+)=\"([^\"]*)\"")
 DAY_RE = re.compile(r"appointment_showDay\.do[^\"']*?dateStr=(\d{2}\.\d{2}\.\d{4})")
 DAY_HREF_RE = re.compile(r"href=\"([^\"]*appointment_showDay\.do[^\"]*dateStr=(\d{2}\.\d{2}\.\d{4})[^\"]*)\"")
 TIME_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
-DAYS_WITH_TIMES = 3   # open at most this many day pages per check to read the free times
+DAYS_WITH_TIMES = int(os.getenv("RK_DAYS_WITH_TIMES", "10"))  # open at most this many day pages per check to read free times
 NEXT_MONTH_RE = re.compile(r"href=\"([^\"]*appointment_showMonth\.do[^\"]*dateStr=(\d{2}\.\d{2}\.\d{4})[^\"]*)\"")
 CATEGORY_RE = re.compile(r"categoryId=(\d+)")
 
