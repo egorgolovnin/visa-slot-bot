@@ -362,8 +362,12 @@ class Database:
 
     async def missions_health(self) -> list[asyncpg.Record]:
         return await self.pool.fetch(
-            """SELECT code, name, fetched_at, error_at, last_error FROM missions
-               WHERE offered AND (code NOT LIKE '%-%' OR $1) ORDER BY name""", _abroad_on())
+            """SELECT m.code, m.name, m.fetched_at, m.error_at, m.last_error,
+                      o.n_dates, o.available
+               FROM missions m
+               LEFT JOIN LATERAL (SELECT n_dates, available FROM observations
+                                  WHERE mission = m.code ORDER BY at DESC LIMIT 1) o ON true
+               WHERE m.offered AND (m.code NOT LIKE '%-%' OR $1) ORDER BY m.name""", _abroad_on())
 
     # ---- slots ----
     async def current(self, mission: str) -> dict[tuple[str, str], date | None]:

@@ -474,7 +474,12 @@ async def health_text(db: Database, poller: Poller, tz: ZoneInfo) -> str:
     for r in await db.missions_health():
         fails = h.fails.get(r["code"], 0)
         mark = "🟢" if not fails else ("🟡" if fails < 3 else "🔴")
-        lines.append(f"{mark} {html.escape(r['name'])}: успех {ago(r['fetched_at'], tz)}"
+        free = ""
+        if r["available"] and r["n_dates"]:
+            free = f" · свободно дней: {r['n_dates']}"
+        elif r["available"]:
+            free = " · есть слот"
+        lines.append(f"{mark} {html.escape(r['name'])}: успех {ago(r['fetched_at'], tz)}{free}"
                      + (f", ошибок подряд {fails}" if fails else ""))
         if fails and r["last_error"]:
             lines.append(f"     <code>{html.escape(r['last_error'][:150])}</code>")

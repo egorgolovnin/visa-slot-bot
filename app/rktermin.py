@@ -68,7 +68,11 @@ def _variants(image: bytes) -> list[bytes]:
     _, otsu = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     median = cv2.medianBlur(img, 3)
     big = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    return [image] + [cv2.imencode(".png", v)[1].tobytes() for v in (otsu, median, big)]
+    _, big_otsu = cv2.threshold(cv2.medianBlur(big, 3), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    adaptive = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 4)
+    denoised = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))  # drop speckle noise
+    outs = (otsu, median, big, big_otsu, adaptive, denoised)
+    return [image] + [cv2.imencode(".png", v)[1].tobytes() for v in outs]
 
 
 def solve_captcha(image: bytes) -> str | None:

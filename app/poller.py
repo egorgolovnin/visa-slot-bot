@@ -72,6 +72,8 @@ class Poller:
         self._dateparse_alerted: set[str] = set()   # missions we've warned about an unparseable slot date
         self._group_sample_sent = False             # one-time: show the first real slot's raw schema
         self._stale_data_alerted: set[str] = set()  # missions whose VFS data went stale
+        self._silent: set[str] = set()              # sources we've alerted about going silent
+        self._proxy_alerted = False                 # whether we've alerted that the proxy is down
 
     async def close(self) -> None:
         await self.client.close()
@@ -121,10 +123,13 @@ class Poller:
         # Must sit above the worst-case HEALTHY gap: poll_interval * MAX_BACKOFF (+jitter) during 429 back-off,
         # or the back-off itself would look like a hang.
         stale_after = max(1800, self.s.poll_interval * (MAX_BACKOFF + 2))
-        await asyncio.sleep(stale_after)
+        await asyncio.sleep(300)  # warmup: let the first cycles populate per-source success times
+        proxy_fail = 0
+        tick = 0
         while True:
+            tick += 1
+            # (a) the whole slow cycle stalled
             last = self.health.last_cycle_at
-            # If run() is already alerting about a crash, don't double-report the same incident.
             if last is not None and not self._crash_alerted:
                 age = (datetime.now(timezone.utc) - last).total_seconds()
                 if age > stale_after and not self._stall_alerted:
@@ -134,7 +139,59 @@ class Poller:
                 elif age <= stale_after and self._stall_alerted:
                     self._stall_alerted = False
                     await self.alert_admins("✅ Проверки слотов снова идут штатно.")
-            await asyncio.sleep(max(120, self.s.poll_interval))
+            # (b) a single source went silent while the rest keep working
+            try:
+                await self._check_source_silence()
+            except Exception:
+                log.exception("source silence check")
+            # (c) proxy liveness, roughly every 6 min
+            if self.s.proxy_url and tick % 3 == 0:
+                proxy_fail = await self._check_proxy(proxy_fail)
+            await asyncio.sleep(120)
+
+    async def _check_source_silence(self) -> None:
+        """Alert if one source hasn't had a successful fetch for too long (its fast loop/captcha died)
+        even though the overall cycle keeps running. Thresholds differ: Germany is fast, VFS is slow."""
+        now = datetime.now(timezone.utc)
+        for r in await self.db.missions_health():
+            code = r["code"]
+            if r["fetched_at"] is None:
+                continue  # never fetched yet (fresh start or disabled) — not a silence
+            limit = max(600, self.s.rk_fast_interval * 10) if code in RK_MISSIONS \
+                else max(1800, self.s.poll_interval * 3)
+            age = (now - r["fetched_at"]).total_seconds()
+            if age > limit and code not in self._silent:
+                self._silent.add(code)
+                await self.alert_admins(f"🔕 {html.escape(r['name'])}: нет успешной проверки "
+                                        f"{int(age // 60)} мин — источник молчит.\nПоследняя ошибка: "
+                                        f"<code>{html.escape((r['last_error'] or '—')[:150])}</code>")
+            elif age <= limit and code in self._silent:
+                self._silent.discard(code)
+                await self.alert_admins(f"🔔 {html.escape(r['name'])}: источник снова отвечает.")
+
+    async def _check_proxy(self, fail: int) -> int:
+        """Ping a stable endpoint through the proxy. Two misses in a row -> alert once (every source
+        goes through this proxy, so its death blinds all of them at once)."""
+        from curl_cffi.requests import AsyncSession
+        ok = False
+        try:
+            async with AsyncSession(proxies={"http": self.s.proxy_url, "https": self.s.proxy_url},
+                                    timeout=20) as s:
+                r = await s.get("https://api.ipify.org", impersonate="chrome")
+                ok = r.status_code == 200 and bool((r.text or "").strip())
+        except Exception as e:
+            log.info("proxy check failed: %s", type(e).__name__)
+        if not ok:
+            fail += 1
+            if fail >= 2 and not self._proxy_alerted:
+                self._proxy_alerted = True
+                await self.alert_admins("🧵 Прокси не отвечает (2 проверки подряд). Все источники идут "
+                                        "через него и могут ослепнуть. Проверь баланс/доступ PROXY_URL.")
+            return fail
+        if self._proxy_alerted:
+            self._proxy_alerted = False
+            await self.alert_admins("🧵 Прокси снова отвечает.")
+        return 0
 
     def page_url(self, code: str) -> str:
         if code in RK_MISSIONS:
@@ -452,6 +509,26 @@ class Poller:
         except Exception as e:
             log.warning("visarea import failed: %s", e)
 
+    async def weekly_digest(self) -> None:
+        """Once per ISO week: send admins the slot-statistics report so we learn where and when
+        slots actually open (which countries, how often, at what hours) and focus effort."""
+        from datetime import date as _date
+        iso = _date.today().isocalendar()
+        key = f"{iso[0]}-W{iso[1]:02d}"
+        if await self.db.kv_get("weekly_digest") == key:
+            return
+        first_ever = await self.db.kv_get("weekly_digest") is None
+        await self.db.kv_set("weekly_digest", key)
+        if first_ever:
+            return  # don't fire a half-empty digest the very first time; start from next week
+        try:
+            from .slotstats import report
+            rows = await self.db.observations(7)
+            text = report(rows, 7, self.s.tz, await self.db.first_observation())
+            await self.alert_admins("🗓 <b>Недельная сводка по слотам</b>\n\n" + text)
+        except Exception as e:
+            log.warning("weekly digest failed: %s", e)
+
     async def disable_abroad(self) -> None:
         """MVP: stop monitoring and hide every VFS centre abroad (codes with a dash)."""
         n = await self.db.pool.fetchval(
@@ -516,6 +593,7 @@ class Poller:
         while True:
             try:
                 await self.import_open_cases()
+                await self.weekly_digest()
                 last_discover = await self.db.last_discovery()
                 if last_discover and datetime.now(timezone.utc) - last_discover > REDISCOVER_EVERY:
                     result = await self.discover()
