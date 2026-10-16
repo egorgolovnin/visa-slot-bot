@@ -586,6 +586,13 @@ class Database:
     async def first_observation(self) -> datetime | None:
         return await self.pool.fetchval("SELECT min(at) FROM observations")
 
+    async def catch_counts(self, mission: str) -> tuple[int, int]:
+        """How many slot catches we've logged (kind opened/earlier): for this mission, and total."""
+        row = await self.pool.fetchrow(
+            """SELECT count(*) FILTER (WHERE mission = $1) AS country, count(*) AS total
+               FROM slot_events WHERE kind IN ('opened', 'earlier')""", mission)
+        return (int(row["country"] or 0), int(row["total"] or 0)) if row else (0, 0)
+
     async def kv_get(self, key: str) -> str | None:
         return await self.pool.fetchval("SELECT value FROM kv WHERE key = $1", key)
 

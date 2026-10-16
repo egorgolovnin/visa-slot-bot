@@ -289,7 +289,7 @@ class Poller:
             self.client.first_group_sample = None
             got = sum(1 for x in slots if x.earliest)
             await self.alert_admins(
-                f"🔬 Впервые вижу заполненный слот от VFS ({html.escape(name)}).\n"
+                f"🔬 Первый распознанный слот после перезапуска ({html.escape(name)}) — проверка парсера.\n"
                 f"Бот распознал дат: <b>{got}</b>.\nСырая структура группы:\n"
                 f"<code>{html.escape(str(sample))}</code>\n\n"
                 "Если дат 0, а в структуре дата есть — пришли это мне, поправим поле.")
@@ -370,6 +370,7 @@ class Poller:
 
     async def _announce(self, code: str, name: str, changes: list[Change], updated: str) -> None:
         now = datetime.now(timezone.utc)
+        c_country, c_total = await self.db.catch_counts(code)  # incl. the catches just saved this cycle
         for ch in changes:
             if ch.kind not in NOTIFY_KINDS or not ch.slot.earliest:
                 continue
@@ -394,7 +395,8 @@ class Poller:
                 f"Ближайшая дата: <b>{fmt_date(ch.slot.earliest)}</b>{was}\n"
                 + (f"Время: {', '.join(times)}\n" if times else "")
                 + f"Данные от: {html.escape(updated or '—')}\n"
-                f"{self.page_url(code)}{orders_line}"
+                + f"📈 Поймано слотов: {html.escape(name)} — {c_country}, всего по всем странам — {c_total}\n"
+                + f"{self.page_url(code)}{orders_line}"
             )
             await self.alert_admins(("⚡ " if waiting else "") + text)
             log.info("alert %s %s %s -> admins, %d matching orders", code, ch.kind, ch.slot.earliest, len(waiting))
