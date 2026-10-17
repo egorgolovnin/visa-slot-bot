@@ -26,14 +26,12 @@ CATEGORY = "Шенген (Греция, Мальта)"
 FORM_RE = re.compile(r"<form[^>]*action=\"([^\"]*login[^\"]*)\"[^>]*>(.*?)</form>", re.I | re.S)
 INPUT_RE = re.compile(r"<input([^>]*)>", re.I)
 ATTR_RE = re.compile(r"([\w\-\[\]]+)=\"([^\"]*)\"")
-ANY_FORM_RE = re.compile(r"<form\b[^>]*>(.*?)</form>", re.I | re.S)
-# anti-bot gate, e.g. "Please answer this question: 3 + 1 ="
-QUESTION_RE = re.compile(r"answer this question\D{0,40}?(\d+)\s*([+\-x*×])\s*(\d+)\s*=", re.I | re.S)
-
-
-def _arith(a: str, op: str, b: str) -> int | None:
-    x, y = int(a), int(b)
-    return {"+": x + y, "-": x - y, "*": x * y, "x": x * y, "×": x * y}.get(op)
+# anti-bot gate: "<span>8 <span class="op_m"></span> 4 =</span>" — the operator is a CSS class
+# (op_p="+", op_m="−", op_x="×"). SuperSaaS's solve_captcha() just reloads the URL with
+# ?captcha=<answer>, so that is all we replicate.
+OP_RE = re.compile(r'(\d+)\s*<span[^>]*class="(op_[a-z0-9]+)"[^>]*>\s*</span>\s*(\d+)', re.I)
+OPS = {"op_p": lambda a, b: a + b, "op_m": lambda a, b: a - b,
+       "op_x": lambda a, b: a * b, "op_t": lambda a, b: a * b, "op_d": lambda a, b: a // b}
 MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
 # "Mon 12 Oct 2026 09:00", "12 Oct 2026", "Oct 12, 2026", "12/10/2026"
 DATE_PATTERNS = (
@@ -89,45 +87,30 @@ class SuperSaasClient:
             await self.session.close()
 
     async def _answer_challenge(self, r):
-        """If the page is the arithmetic anti-bot gate, solve it and submit; return the new response.
-        Loops a few times in case a fresh question is shown after a wrong/again prompt."""
-        for _ in range(3):
-            m = QUESTION_RE.search(r.text)
+        """If the page is the arithmetic anti-bot gate, solve it the way the site's JS does —
+        reload the same URL with ?captcha=<answer>. Loops a few times (a wrong answer just shows
+        a fresh question with new numbers)."""
+        from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
+        for _ in range(4):
+            if "solve_captcha" not in r.text and "answer this question" not in r.text.lower():
+                return r
+            m = OP_RE.search(r.text)
             if not m:
-                if "this question" in r.text.lower():
-                    i = r.text.lower().find("this question")
-                    log.warning("supersaas question RAW html: %s", r.text[max(0, i - 80):i + 500])
+                i = r.text.lower().find("this question")
+                log.warning("supersaas captcha not parsed: %s", r.text[max(0, i - 40):i + 300] if i > 0 else r.text[:300])
                 return r
-            answer = _arith(*m.groups())
-            if answer is None:
+            a, opcls, b = int(m.group(1)), m.group(2).lower(), int(m.group(3))
+            fn = OPS.get(opcls)
+            if fn is None:
+                log.warning("supersaas unknown captcha op class %s", opcls)
                 return r
-            action, fields, answer_field = None, {}, None
-            for fm in ANY_FORM_RE.finditer(r.text):
-                block = fm.group(1)
-                inputs, afield = {}, None
-                for raw in INPUT_RE.findall(block):
-                    a = {k.lower(): htmllib.unescape(v) for k, v in ATTR_RE.findall(raw)}
-                    nm, typ = a.get("name"), a.get("type", "text").lower()
-                    if not nm or typ in ("submit", "button", "image"):
-                        continue
-                    if typ in ("text", "number", "tel") and afield is None:
-                        afield, inputs[nm] = nm, str(answer)
-                    else:
-                        inputs[nm] = a.get("value", "")
-                if afield:  # this is the question form (it has an answer input)
-                    act = re.search(r'action="([^"]*)"', fm.group(0))
-                    action = htmllib.unescape(act.group(1)) if act else str(r.url)
-                    fields, answer_field = inputs, afield
-                    break
-            if not answer_field:
-                log.warning("supersaas: question seen but no form/field: %s", text_of(r.text)[:300])
-                return r
-            if action.startswith("http"):
-                target = action
-            else:
-                target = f"{BASE}{action}" if action.startswith("/") else f"{BASE}/{action}"
-            log.info("supersaas: solved anti-bot question = %s", answer)
-            r = await self.session.post(target, data=fields, headers={"referer": str(r.url)})
+            answer = fn(a, b)
+            u = urlparse(str(r.url))
+            q = dict(parse_qsl(u.query))
+            q["captcha"] = str(answer)
+            target = urlunparse(u._replace(query=urlencode(q)))
+            log.info("supersaas captcha %d %s %d = %d", a, opcls, b, answer)
+            r = await self.session.get(target, headers={"referer": str(r.url)})
         return r
 
     async def _login(self) -> None:
