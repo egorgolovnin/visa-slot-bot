@@ -153,8 +153,11 @@ class Poller:
                 proxy_fail = await self._check_proxy(proxy_fail)
             await asyncio.sleep(120)
 
-    async def _silence_flag(self, code: str, name: str, age: float, limit: float, last_error: str | None) -> None:
-        if age > limit and code not in self._silent:
+    async def _silence_flag(self, code: str, name: str, age: float, limit: float,
+                            last_error: str | None, uptime: float) -> None:
+        # Don't raise a silence until the process has been up longer than the window too —
+        # right after a restart `fetched_at` is still the pre-restart success, which is not a silence.
+        if age > limit and uptime > limit and code not in self._silent:
             self._silent.add(code)
             err = f"\nПоследняя ошибка: <code>{html.escape((last_error or '—')[:150])}</code>" if last_error else ""
             await self.alert_admins(f"🔕 {html.escape(name)}: нет успешной проверки "
@@ -168,6 +171,7 @@ class Poller:
         Germany/Greece are checked individually; VFS is checked as ONE group (so a proxy/VFS-wide
         outage is one alert, not one per country), firing only when every VFS source is stale."""
         now = datetime.now(timezone.utc)
+        uptime = (now - self.health.started_at).total_seconds()
         vfs_ages: list[float] = []
         for r in await self.db.missions_health():
             code = r["code"]
@@ -175,15 +179,16 @@ class Poller:
                 continue  # never fetched yet (fresh start or disabled) — not a silence
             age = (now - r["fetched_at"]).total_seconds()
             if code in RK_MISSIONS:
-                await self._silence_flag(code, r["name"], age, max(600, self.s.rk_fast_interval * 10), r["last_error"])
+                await self._silence_flag(code, r["name"], age, max(600, self.s.rk_fast_interval * 10),
+                                         r["last_error"], uptime)
             elif code in SS_MISSIONS:
                 # above the back-off window so a single SuperSaaS cooldown doesn't false-alarm
-                await self._silence_flag(code, r["name"], age, SS_COOLDOWN + 1800, r["last_error"])
+                await self._silence_flag(code, r["name"], age, SS_COOLDOWN + 1800, r["last_error"], uptime)
             else:
                 vfs_ages.append(age)
         if vfs_ages:  # freshest VFS success; if even that is stale, the whole VFS side is down
             await self._silence_flag("vfs", "VFS (все страны)", min(vfs_ages),
-                                     max(1800, self.s.poll_interval * 3), None)
+                                     max(1800, self.s.poll_interval * 3), None, uptime)
 
     async def _check_proxy(self, fail: int) -> int:
         """Ping a stable endpoint through the proxy. Two misses in a row -> alert once (every source
