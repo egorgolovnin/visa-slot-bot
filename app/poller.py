@@ -78,6 +78,7 @@ class Poller:
     async def close(self) -> None:
         await self.client.close()
         await self.ss.close()
+        await self.rk.close()
 
     async def alert_admins(self, text: str) -> None:
         for uid in self.s.admin_targets:

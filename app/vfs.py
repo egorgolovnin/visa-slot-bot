@@ -7,6 +7,7 @@ residential/mobile proxy if every call comes back Blocked.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 
@@ -93,8 +94,12 @@ def data_age_minutes(data: dict) -> int | None:
     return round(value * factor) if factor else None
 
 
+_RL_CODE_RE = re.compile(r'"429\d{3}"')  # VFS rate-limit codes come as quoted strings: "429001" / "429002" …
+
+
 def _is_rate_limited(status: int, text: str) -> bool:
-    return status == 429 or '"429' in text
+    # Only HTTP 429, or a real VFS 429xxx code — not any stray '429' substring in a valid 200 body.
+    return status == 429 or bool(_RL_CODE_RE.search(text[:300]))
 
 
 class VfsPublicClient:

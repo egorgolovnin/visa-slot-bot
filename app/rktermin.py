@@ -135,6 +135,19 @@ class RkTerminClient:
         self._day_logged = False
         self.form_report: str | None = None    # filled once, when the booking form is first seen
         self._form_probed = False
+        self.session: AsyncSession | None = None  # reused across fetches so the captcha-passed cookie sticks
+
+    def _session(self) -> AsyncSession:
+        if self.session is None:
+            self.session = AsyncSession(proxies=self.proxies, timeout=30)
+        return self.session
+
+    async def close(self) -> None:
+        if self.session is not None:
+            try:
+                await self.session.close()
+            finally:
+                self.session = None
 
     def page_url(self) -> str:
         cat = f"&categoryId={self.category_id}" if self.category_id else ""
@@ -272,12 +285,15 @@ class RkTerminClient:
         try:
             return await self._fetch()
         except Blocked:
+            await self.close()  # drop the session so a block/captcha starts fresh next time
             raise
         except Exception as e:  # network errors, timeouts
+            await self.close()
             raise Blocked(f"rktermin network: {type(e).__name__}: {str(e)[:120]}") from e
 
     async def _fetch(self) -> tuple[list[Slot], str]:
-        async with AsyncSession(proxies=self.proxies, timeout=30) as s:
+        if True:
+            s = self._session()  # persistent: keeps the captcha-passed cookie between cycles
             cat = await self._category(s)
             page = ""
             for attempt in range(1, MAX_CAPTCHA_TRIES + 1):
