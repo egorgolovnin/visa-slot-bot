@@ -469,6 +469,7 @@ class Poller:
                 f"📈 Поймано слотов: {html.escape(name)} — {c_country}, всего по всем странам — {c_total}\n"
                 f"{self.page_url(code)}")
             log.info("alert %s batch %d dates -> admins", code, len(dates))
+            await self._notify_subscribers(code, name, dates, updated)
             return
         for ch in fire:
             head = "🟢 Появился слот" if ch.kind == OPENED else "⏫ Слот стал раньше"
@@ -491,6 +492,31 @@ class Poller:
             )
             await self.alert_admins(("⚡ " if waiting else "") + text)
             log.info("alert %s %s %s -> admins, %d matching orders", code, ch.kind, ch.slot.earliest, len(waiting))
+        await self._notify_subscribers(code, name, [ch.slot.earliest for ch in fire], updated)
+
+    async def _notify_subscribers(self, code: str, name: str, dates: list, updated: str) -> None:
+        """Fan a slot alert out to the friends subscribed to this country whose date window matches.
+        Admins already got their own (richer) alert, so they are excluded here to avoid a double ping."""
+        admins = set(self.s.admin_targets)
+        per_user: dict[int, list] = {}
+        for d in dates:
+            if not d:
+                continue
+            try:
+                for uid in await self.db.subscribers(code, d):
+                    if uid not in admins:
+                        per_user.setdefault(uid, []).append(d)
+            except Exception:
+                log.exception("subscribers lookup %s %s", code, d)
+        for uid, ds in per_user.items():
+            ds = sorted(set(ds))
+            shown = ", ".join(fmt_date(x) for x in ds[:20]) + (f" и ещё {len(ds) - 20}" if len(ds) > 20 else "")
+            text = (f"🟢 Появился слот: <b>{html.escape(name)}</b>\n"
+                    f"{'Дата' if len(ds) == 1 else 'Даты'}: <b>{shown}</b>\n"
+                    f"Данные от: {html.escape(updated or '—')}\n{self.page_url(code)}")
+            await self.notify(uid, text)
+        if per_user:
+            log.info("notified %d subscribers for %s", len(per_user), code)
 
     def wake(self) -> None:
         self._wake.set()
