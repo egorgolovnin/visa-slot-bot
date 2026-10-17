@@ -160,6 +160,9 @@ class SuperSaasClient:
         if r.status_code != 200:
             log.warning("supersaas %s body: %s", r.status_code, text_of(r.text)[:400])
             raise Blocked(f"supersaas {r.status_code}")
+        # Still on the captcha gate? Don't silently report "no slots" — that would hide real ones.
+        if "solve_captcha" in r.text or "answer this question" in r.text.lower():
+            raise Blocked("supersaas: captcha not solved")
         if not self._raw_logged:
             self._raw_logged = True
             log.info("free view sample: %s", text_of(r.text)[:1500])

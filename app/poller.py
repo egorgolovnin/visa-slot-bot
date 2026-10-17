@@ -149,25 +149,36 @@ class Poller:
                 proxy_fail = await self._check_proxy(proxy_fail)
             await asyncio.sleep(120)
 
+    async def _silence_flag(self, code: str, name: str, age: float, limit: float, last_error: str | None) -> None:
+        if age > limit and code not in self._silent:
+            self._silent.add(code)
+            err = f"\nПоследняя ошибка: <code>{html.escape((last_error or '—')[:150])}</code>" if last_error else ""
+            await self.alert_admins(f"🔕 {html.escape(name)}: нет успешной проверки "
+                                    f"{int(age // 60)} мин — источник молчит.{err}")
+        elif age <= limit and code in self._silent:
+            self._silent.discard(code)
+            await self.alert_admins(f"🔔 {html.escape(name)}: источник снова отвечает.")
+
     async def _check_source_silence(self) -> None:
-        """Alert if one source hasn't had a successful fetch for too long (its fast loop/captcha died)
-        even though the overall cycle keeps running. Thresholds differ: Germany is fast, VFS is slow."""
+        """Alert if a source stopped having successful fetches even though the cycle keeps running.
+        Germany/Greece are checked individually; VFS is checked as ONE group (so a proxy/VFS-wide
+        outage is one alert, not one per country), firing only when every VFS source is stale."""
         now = datetime.now(timezone.utc)
+        vfs_ages: list[float] = []
         for r in await self.db.missions_health():
             code = r["code"]
             if r["fetched_at"] is None:
                 continue  # never fetched yet (fresh start or disabled) — not a silence
-            limit = max(600, self.s.rk_fast_interval * 10) if code in RK_MISSIONS \
-                else max(1800, self.s.poll_interval * 3)
             age = (now - r["fetched_at"]).total_seconds()
-            if age > limit and code not in self._silent:
-                self._silent.add(code)
-                await self.alert_admins(f"🔕 {html.escape(r['name'])}: нет успешной проверки "
-                                        f"{int(age // 60)} мин — источник молчит.\nПоследняя ошибка: "
-                                        f"<code>{html.escape((r['last_error'] or '—')[:150])}</code>")
-            elif age <= limit and code in self._silent:
-                self._silent.discard(code)
-                await self.alert_admins(f"🔔 {html.escape(r['name'])}: источник снова отвечает.")
+            if code in RK_MISSIONS:
+                await self._silence_flag(code, r["name"], age, max(600, self.s.rk_fast_interval * 10), r["last_error"])
+            elif code in SS_MISSIONS:
+                await self._silence_flag(code, r["name"], age, max(1800, self.s.poll_interval * 3), r["last_error"])
+            else:
+                vfs_ages.append(age)
+        if vfs_ages:  # freshest VFS success; if even that is stale, the whole VFS side is down
+            await self._silence_flag("vfs", "VFS (все страны)", min(vfs_ages),
+                                     max(1800, self.s.poll_interval * 3), None)
 
     async def _check_proxy(self, fail: int) -> int:
         """Ping a stable endpoint through the proxy. Two misses in a row -> alert once (every source
@@ -340,7 +351,7 @@ class Poller:
             self._dateparse_alerted.discard(code)
         # One-time confirmation: the first time VFS ever returns a populated slot group,
         # show its raw structure so we can verify live that the date was recognised.
-        if not self._group_sample_sent and getattr(self.client, "first_group_sample", None):
+        if is_vfs and not self._group_sample_sent and getattr(self.client, "first_group_sample", None):
             self._group_sample_sent = True
             sample = self.client.first_group_sample
             self.client.first_group_sample = None

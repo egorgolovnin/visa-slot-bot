@@ -310,9 +310,11 @@ class RkTerminClient:
                     break  # session wants a fresh captcha; stop walking, keep what we already collected
 
             day_list = sorted(days)
-            self.last_times = await self._read_times(s, hrefs, day_list) if day_list else {}
-
-            if not day_list:
+            if day_list:
+                self.last_times = await self._read_times(s, hrefs, day_list)
+            else:
+                # reset both, or a stale new_times from a prior cycle would re-alert on an empty one
+                self.last_times, self.new_times = {}, {}
                 log.info("rktermin: no free days across %d month(s)", months_seen)
             self.last_free_days = len(day_list)
             # One Slot PER free day so the pipeline treats every date as its own slot: a newly-appeared
