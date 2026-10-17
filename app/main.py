@@ -106,6 +106,8 @@ async def main() -> None:
     canary_task = asyncio.create_task(poller.canary())
     rk_task = asyncio.create_task(poller.rk_fast_loop())
     pay_task = asyncio.create_task(orders.payment_watcher(bot, db, settings))
+    from . import backup
+    backup_task = asyncio.create_task(backup.backup_watcher(bot, db, settings))
     try:
         await alert_admins("🔄 Easy Visa запущен. Если это не плановый деплой — бот перезапускался сам (падал).")
     except Exception:
@@ -120,6 +122,7 @@ async def main() -> None:
         if web_runner:
             await web_runner.cleanup()
         pay_task.cancel()
+        backup_task.cancel()
         await poller.close()
         await db.close()
         await bot.session.close()

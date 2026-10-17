@@ -730,6 +730,19 @@ async def health(message: Message, db: Database, poller: Poller, settings: Setti
         await message.answer(await health_text(db, poller, ZoneInfo(settings.tz)))
 
 
+@router.message(Command("backup"))
+async def backup_cmd(message: Message, db: Database, settings: Settings, bot: Bot) -> None:
+    if not await admin_only(message, settings):
+        return
+    await message.answer("🗄 Делаю бэкап БД…")
+    try:
+        from .backup import run_backup
+        n = await run_backup(db, bot, settings)
+        await message.answer(f"✅ Бэкап отправлен ({max(1, n // 1024)} КБ).")
+    except Exception as e:
+        await message.answer(f"⚠️ Бэкап не удался: <code>{html.escape(str(e)[:200])}</code>")
+
+
 @router.message(Command("vfslogin"))
 async def vfslogin(message: Message, command: CommandObject, poller: Poller, settings: Settings) -> None:
     if not await admin_only(message, settings):
