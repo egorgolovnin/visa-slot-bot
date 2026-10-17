@@ -1,7 +1,8 @@
 """Greek embassy in Nicosia (also handles Malta) books Schengen appointments on SuperSaaS.
 
-The calendar needs a logged-in account (free signup, no captcha). The bot only looks at the
-'free slots' view; it never books. Enabled when SUPERSAAS_EMAIL and SUPERSAAS_PASSWORD are set.
+The calendar needs a logged-in account (free signup). Access is gated by a simple arithmetic
+anti-bot question ("3 + 1 = ") which we solve automatically. The bot only looks at the 'free
+slots' view; it never books. Enabled when SUPERSAAS_EMAIL and SUPERSAAS_PASSWORD are set.
 """
 from __future__ import annotations
 
@@ -25,6 +26,14 @@ CATEGORY = "Шенген (Греция, Мальта)"
 FORM_RE = re.compile(r"<form[^>]*action=\"([^\"]*login[^\"]*)\"[^>]*>(.*?)</form>", re.I | re.S)
 INPUT_RE = re.compile(r"<input([^>]*)>", re.I)
 ATTR_RE = re.compile(r"([\w\-\[\]]+)=\"([^\"]*)\"")
+ANY_FORM_RE = re.compile(r"<form\b[^>]*>(.*?)</form>", re.I | re.S)
+# anti-bot gate, e.g. "Please answer this question: 3 + 1 ="
+QUESTION_RE = re.compile(r"answer this question\D{0,40}?(\d+)\s*([+\-x*×])\s*(\d+)\s*=", re.I | re.S)
+
+
+def _arith(a: str, op: str, b: str) -> int | None:
+    x, y = int(a), int(b)
+    return {"+": x + y, "-": x - y, "*": x * y, "x": x * y, "×": x * y}.get(op)
 MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
 # "Mon 12 Oct 2026 09:00", "12 Oct 2026", "Oct 12, 2026", "12/10/2026"
 DATE_PATTERNS = (
@@ -79,12 +88,52 @@ class SuperSaasClient:
         if self.session:
             await self.session.close()
 
+    async def _answer_challenge(self, r):
+        """If the page is the arithmetic anti-bot gate, solve it and submit; return the new response.
+        Loops a few times in case a fresh question is shown after a wrong/again prompt."""
+        for _ in range(3):
+            m = QUESTION_RE.search(r.text)
+            if not m:
+                return r
+            answer = _arith(*m.groups())
+            if answer is None:
+                return r
+            action, fields, answer_field = None, {}, None
+            for fm in ANY_FORM_RE.finditer(r.text):
+                block = fm.group(1)
+                inputs, afield = {}, None
+                for raw in INPUT_RE.findall(block):
+                    a = {k.lower(): htmllib.unescape(v) for k, v in ATTR_RE.findall(raw)}
+                    nm, typ = a.get("name"), a.get("type", "text").lower()
+                    if not nm or typ in ("submit", "button", "image"):
+                        continue
+                    if typ in ("text", "number", "tel") and afield is None:
+                        afield, inputs[nm] = nm, str(answer)
+                    else:
+                        inputs[nm] = a.get("value", "")
+                if afield:  # this is the question form (it has an answer input)
+                    act = re.search(r'action="([^"]*)"', fm.group(0))
+                    action = htmllib.unescape(act.group(1)) if act else str(r.url)
+                    fields, answer_field = inputs, afield
+                    break
+            if not answer_field:
+                log.warning("supersaas: question seen but no form/field: %s", text_of(r.text)[:300])
+                return r
+            if action.startswith("http"):
+                target = action
+            else:
+                target = f"{BASE}{action}" if action.startswith("/") else f"{BASE}/{action}"
+            log.info("supersaas: solved anti-bot question = %s", answer)
+            r = await self.session.post(target, data=fields, headers={"referer": str(r.url)})
+        return r
+
     async def _login(self) -> None:
         if self.session:
             await self.session.close()
         self.session = AsyncSession(proxies=self.proxies, timeout=30, impersonate="chrome")
         login_url = f"{BASE}/schedule/login/{ACCOUNT}/{SCHEDULE}"
         r = await self.session.get(login_url)
+        r = await self._answer_challenge(r)
         form = FORM_RE.search(r.text)
         fields: dict[str, str] = {}
         action = login_url
@@ -98,6 +147,7 @@ class SuperSaasClient:
         fields["password"] = self.password
         target = action if action.startswith("http") else f"{BASE}{action}"
         r = await self.session.post(target, data=fields, headers={"referer": login_url})
+        r = await self._answer_challenge(r)   # a question may be shown right after login
         if "password" in text_of(r.text).lower() and "log in" in text_of(r.text).lower():
             log.warning("login failed, page: %s", text_of(r.text)[:500])
             raise Blocked("supersaas: login failed, check SUPERSAAS_EMAIL/PASSWORD")
@@ -116,10 +166,13 @@ class SuperSaasClient:
             await self._login()
         url = f"{self.page_url()}?view=free"
         r = await self.session.get(url)
+        r = await self._answer_challenge(r)
         if "/schedule/login/" in str(r.url) or "User Login" in r.text:
             await self._login()
             r = await self.session.get(url)
+            r = await self._answer_challenge(r)
         if r.status_code != 200:
+            log.warning("supersaas %s body: %s", r.status_code, text_of(r.text)[:400])
             raise Blocked(f"supersaas {r.status_code}")
         if not self._raw_logged:
             self._raw_logged = True
