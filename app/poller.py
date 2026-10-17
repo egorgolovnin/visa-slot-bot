@@ -25,8 +25,8 @@ STALE_DATA_MIN = 360          # VFS data older than this (minutes) = its cache i
 TRANSIENT_ALERT_AFTER = 6     # VFS's empty/1019/1020 answers come and go: wait ~1 hour before alerting
 MAX_BACKOFF = 6               # max multiplier of the VFS poll interval after 429s
 RK_COOLDOWN = 1800            # seconds to leave RK-Termin alone after a failed check
-SS_INTERVAL = 1200            # min seconds between SuperSaaS (Greece) polls — it rate-limits bursts (429)
-SS_COOLDOWN = 2700            # after a SuperSaaS 429/fail, leave it alone this long
+SS_INTERVAL = 1800            # min seconds between SuperSaaS (Greece) polls — it rate-limits bursts (429)
+SS_COOLDOWN = 7200            # after a SuperSaaS 429/fail, leave it alone this long (it soft-bans "this browser")
 REALERT_AFTER = 1800          # same slot flapping open/closed: alert again only after this
 DISCOVER_RETRIES = 3          # VFS answers transient 1019/1020 errors; retry before "not offered"
 CYPRUS_CORE = {"aut", "svk", "fin", "hrv"}   # VFS centres we sell in Cyprus — always kept monitored

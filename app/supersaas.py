@@ -84,7 +84,10 @@ class SuperSaasClient:
 
     async def close(self) -> None:
         if self.session:
-            await self.session.close()
+            try:
+                await self.session.close()
+            finally:
+                self.session = None
 
     async def _answer_challenge(self, r):
         """If the page is the arithmetic anti-bot gate, solve it the way the site's JS does —
@@ -143,8 +146,10 @@ class SuperSaasClient:
         try:
             return await self._fetch()
         except Blocked:
+            await self.close()  # drop the session so a 429 "too many requests from this browser" retries fresh
             raise
         except Exception as e:
+            await self.close()
             raise Blocked(f"supersaas network: {type(e).__name__}: {str(e)[:120]}") from e
 
     async def _fetch(self) -> tuple[list[Slot], str]:
