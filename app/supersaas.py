@@ -94,6 +94,9 @@ class SuperSaasClient:
         for _ in range(3):
             m = QUESTION_RE.search(r.text)
             if not m:
+                if "this question" in r.text.lower():
+                    i = r.text.lower().find("this question")
+                    log.warning("supersaas question RAW html: %s", r.text[max(0, i - 80):i + 500])
                 return r
             answer = _arith(*m.groups())
             if answer is None:
