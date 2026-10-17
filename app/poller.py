@@ -25,6 +25,8 @@ STALE_DATA_MIN = 360          # VFS data older than this (minutes) = its cache i
 TRANSIENT_ALERT_AFTER = 6     # VFS's empty/1019/1020 answers come and go: wait ~1 hour before alerting
 MAX_BACKOFF = 6               # max multiplier of the VFS poll interval after 429s
 RK_COOLDOWN = 1800            # seconds to leave RK-Termin alone after a failed check
+SS_INTERVAL = 1200            # min seconds between SuperSaaS (Greece) polls — it rate-limits bursts (429)
+SS_COOLDOWN = 2700            # after a SuperSaaS 429/fail, leave it alone this long
 REALERT_AFTER = 1800          # same slot flapping open/closed: alert again only after this
 DISCOVER_RETRIES = 3          # VFS answers transient 1019/1020 errors; retry before "not offered"
 CYPRUS_CORE = {"aut", "svk", "fin", "hrv"}   # VFS centres we sell in Cyprus — always kept monitored
@@ -63,6 +65,7 @@ class Poller:
         self.rk = RkTerminClient(settings.proxy_url)
         self.rk_resume_at: datetime | None = None
         self.ss = SuperSaasClient(settings.proxy_url)
+        self.ss_resume_at: datetime | None = None   # throttle/back-off for Greece (SuperSaaS 429s on bursts)
         self.health = Health()
         self._wake = asyncio.Event()
         self._last_alert: dict[tuple, datetime] = {}
@@ -174,7 +177,8 @@ class Poller:
             if code in RK_MISSIONS:
                 await self._silence_flag(code, r["name"], age, max(600, self.s.rk_fast_interval * 10), r["last_error"])
             elif code in SS_MISSIONS:
-                await self._silence_flag(code, r["name"], age, max(1800, self.s.poll_interval * 3), r["last_error"])
+                # above the back-off window so a single SuperSaaS cooldown doesn't false-alarm
+                await self._silence_flag(code, r["name"], age, SS_COOLDOWN + 1800, r["last_error"])
             else:
                 vfs_ages.append(age)
         if vfs_ages:  # freshest VFS success; if even that is stale, the whole VFS side is down
@@ -290,12 +294,16 @@ class Poller:
                 continue  # the dedicated fast loop owns Germany — don't double-poll it in the slow cycle
             if code in RK_MISSIONS and self.rk_resume_at and now < self.rk_resume_at:
                 continue
+            if code in SS_MISSIONS and self.ss_resume_at and now < self.ss_resume_at:
+                continue  # Greece is throttled (SuperSaaS rate-limits bursts)
             if "-" in code and (not ABROAD_ON or self._cycle_no % ABROAD_EVERY):
                 continue  # MVP: centres abroad are not polled while abroad orders are closed
             is_vfs = code not in RK_MISSIONS and code not in SS_MISSIONS
             if is_vfs and vfs_paused:
                 continue
             status = await self._poll_mission(code, name)
+            if code in SS_MISSIONS:  # space Greece out (normal) or back off hard (after a 429/fail)
+                self.ss_resume_at = now + timedelta(seconds=SS_INTERVAL if status == "ok" else SS_COOLDOWN)
             if status == "ratelimited":
                 vfs_paused = True  # a VFS 429 pauses only the other VFS countries, not Germany/Greece
             elif status == "ok" and is_vfs:
