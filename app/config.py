@@ -32,7 +32,7 @@ class Settings:
     docs_price: float = 250.0   # EUR for "we prepare the whole document package"
     canary_route: str | None = None  # a VFS route that reliably HAS slots (e.g. "are-fra") — parser self-test
     rk_fast: bool = True        # Germany (RK-Termin) has no login/VFS limit: poll it in its own tight loop
-    rk_fast_interval: int = 30  # seconds to idle between RK-Termin checks in the fast loop (fetch itself ~35s)
+    rk_fast_interval: int = 15  # seconds to idle between RK-Termin checks (German slots can die in <2 min)
 
     @property
     def admin_targets(self) -> tuple[int, ...]:
