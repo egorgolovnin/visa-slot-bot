@@ -136,10 +136,12 @@ class RkTerminClient:
         self.form_report: str | None = None    # filled once, when the booking form is first seen
         self._form_probed = False
         self.session: AsyncSession | None = None  # reused across fetches so the captcha-passed cookie sticks
+        self._force_direct = False  # diplo isn't Cloudflare-IP-gated; if the proxy flakes, go direct
 
     def _session(self) -> AsyncSession:
         if self.session is None:
-            self.session = AsyncSession(proxies=self.proxies, timeout=30)
+            proxies = None if self._force_direct else self.proxies
+            self.session = AsyncSession(proxies=proxies, timeout=30)
         return self.session
 
     async def close(self) -> None:
@@ -281,11 +283,25 @@ class RkTerminClient:
         self.form_report = (f"Поля формы записи ({captcha}):\n" + "\n".join(f"• {f}" for f in fields)) if fields else None
         log.info("FORM PROBE: %s | text: %s", fields, re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", form))[:1500])
 
+    _PROXY_ERR = ("proxy", "connect", "tunnel", "failed to perform", "timed out", "timeout")
+
     async def fetch(self) -> tuple[list[Slot], str]:
         try:
             return await self._fetch()
-        except Blocked:
+        except Blocked as e:
             await self.close()  # drop the session so a block/captcha starts fresh next time
+            # diplo doesn't need the residential proxy; if the proxy flaked, retry once DIRECT so
+            # Germany doesn't go blind during a proxy outage. Stay direct while it keeps working.
+            if self.proxies and not self._force_direct and any(s in str(e).lower() for s in self._PROXY_ERR):
+                self._force_direct = True
+                try:
+                    return await self._fetch()
+                except Blocked:
+                    await self.close()
+                    self._force_direct = False  # direct didn't help either — proxy again next time
+                    raise
+            if self._force_direct:
+                self._force_direct = False  # direct mode started failing — swing back to the proxy next cycle
             raise
         except Exception as e:  # network errors, timeouts
             await self.close()
