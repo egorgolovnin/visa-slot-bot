@@ -1,3 +1,42 @@
-__pycache__/
+# env
 .env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+# monitor: секреты
+monitor/config/.env
+monitor/config/.env.*
+monitor/config/proxies.txt*
+monitor/config/accounts.yaml*
+*.pem
+!app/vfs_pubkey.pem
+
+# monitor: рантайм-данные
+monitor/data/
+*.log
+logs/
+
+# редакторы
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# бэкапы
+*.bak
+*.bak-*
+*.bak_*
+*.swapbak-*
+*.catchbak-*
