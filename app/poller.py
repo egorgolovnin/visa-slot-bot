@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import os
 import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -21,6 +22,8 @@ log = logging.getLogger("poller")
 Notify = Callable[[int, str], Awaitable[bool]]
 
 FAIL_ALERT_AFTER = 3          # failed checks in a row before admins hear about one country
+ADAPTIVE_FRESH_MIN = int(os.getenv("ADAPTIVE_FRESH_MIN", "5"))  # VFS data this fresh (min) -> poll every cycle
+ADAPTIVE_MAX_MIN = int(os.getenv("ADAPTIVE_MAX_MIN", "15"))     # never defer a VFS country longer than this (min)
 STALE_DATA_MIN = 360          # VFS data older than this (minutes) = its cache is frozen, "no slots" unreliable
 TRANSIENT_ALERT_AFTER = 6     # VFS's empty/1019/1020 answers come and go: wait ~1 hour before alerting
 MAX_BACKOFF = 6               # max multiplier of the VFS poll interval after 429s
@@ -77,6 +80,7 @@ class Poller:
         self._stale_data_alerted: set[str] = set()  # missions whose VFS data went stale
         self._silent: set[str] = set()              # sources we've alerted about going silent
         self._proxy_alerted = False                 # whether we've alerted that the proxy is down
+        self._vfs_next_due: dict[str, datetime] = {}  # adaptive per-country schedule from VFS cache freshness
 
     async def close(self) -> None:
         await self.client.close()
@@ -301,6 +305,7 @@ class Poller:
         missions = await self.db.offered_missions()
         now = datetime.now(timezone.utc)
         vfs_paused = False
+        polled = deferred = 0
         for code, name in missions:
             if code in RK_MISSIONS and self.s.rk_fast:
                 continue  # the dedicated fast loop owns Germany — don't double-poll it in the slow cycle
@@ -313,7 +318,15 @@ class Poller:
             is_vfs = code not in RK_MISSIONS and code not in SS_MISSIONS
             if is_vfs and vfs_paused:
                 continue
+            # Adaptive: a country whose VFS cache updates slowly is deferred (never past ADAPTIVE_MAX_MIN),
+            # so the live-cache ones (e.g. Croatia) get the airtime instead of wasting it on frozen data.
+            due = self._vfs_next_due.get(code)
+            if is_vfs and due and now < due:
+                deferred += 1
+                continue
             status = await self._poll_mission(code, name)
+            if is_vfs:
+                polled += 1
             if code in SS_MISSIONS:  # space Greece out (normal) or back off hard (after a 429/fail)
                 self.ss_resume_at = now + timedelta(seconds=SS_INTERVAL if status == "ok" else SS_COOLDOWN)
             if status == "ratelimited":
@@ -324,6 +337,8 @@ class Poller:
         if not vfs_paused:
             self.health.backoff = 1
         self.health.last_cycle_at = datetime.now(timezone.utc)
+        if polled or deferred:
+            log.info("cycle: polled %d VFS, deferred %d (adaptive by freshness)", polled, deferred)
 
     async def _poll_mission(self, code: str, name: str) -> str:
         """Fetch one mission and run the full process + announce path. Returns one of
@@ -412,6 +427,14 @@ class Poller:
             await self.alert_admins(f"⏰ <b>{html.escape(name)}</b>: новое время на уже открытых днях\n"
                                     f"{lines}\n{self.page_url(code)}")
         await self._recovered(code, name)
+        if is_vfs:
+            # Schedule the next check from how stale VFS's own data is: fresh cache -> every cycle;
+            # slow cache -> defer ~half its age, capped so a sudden opening is never missed by much.
+            if age is None or age <= ADAPTIVE_FRESH_MIN:
+                cooldown = 0
+            else:
+                cooldown = min(age // 2, ADAPTIVE_MAX_MIN)
+            self._vfs_next_due[code] = datetime.now(timezone.utc) + timedelta(minutes=cooldown)
         return "ok"
 
     async def rk_fast_loop(self) -> None:
