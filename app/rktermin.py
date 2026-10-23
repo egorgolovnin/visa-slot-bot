@@ -92,6 +92,20 @@ def solve_captcha(image: bytes) -> str | None:
     return votes.most_common(1)[0][0]
 
 
+async def solve_captcha_text(image: bytes) -> str | None:
+    """Prefer Capsolver (≈3–5s, high hit-rate) when CAPSOLVER_KEY is set; fall back to local ddddocr.
+    Either way the answer is normalised to exactly 6 chars of [a-z0-9]."""
+    from . import capsolver
+    if capsolver.enabled():
+        raw = await capsolver.solve_image(image)
+        if raw:
+            txt = re.sub(r"[^a-z0-9]", "", raw.lower())
+            if len(txt) == 6:
+                return txt
+            log.info("capsolver image gave %r (len %d) — falling back to ddddocr", raw, len(txt))
+    return solve_captcha(image)
+
+
 def find_schengen_category(page: str) -> str | None:
     """The category whose surrounding text mentions Schengen (not the north-Nicosia office)."""
     for m in CATEGORY_RE.finditer(page):
@@ -187,7 +201,7 @@ class RkTerminClient:
             log.warning("captcha page not understood: %s", re.sub(r"\s+", " ", page)[:1500])
             raise Blocked("rktermin: captcha page not understood")
         raw_img = base64.b64decode(re.sub(r"\s+", "", img.group(1)))
-        answer = solve_captcha(raw_img)
+        answer = await solve_captcha_text(raw_img)
         if not answer:
             log.info("captcha OCR unusable: %r", _solver().classification(raw_img))
             return ""

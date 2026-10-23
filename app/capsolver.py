@@ -135,6 +135,44 @@ async def solve_turnstile(url: str, site_key: str, action: str | None = None,
         return None
 
 
+async def solve_image(image: bytes, module: str = "common", timeout: int = 40) -> str | None:
+    """Solve a plain image captcha (e.g. the RK-Termin 6-char [a-z0-9] picture) via Capsolver's
+    ImageToTextTask. Returns the recognised text, or None if disabled/failed. ~$0.0006 per solve.
+    The image task is usually answered right in createTask; we still poll a few times just in case."""
+    import base64 as _b64
+    client_key = os.getenv("CAPSOLVER_KEY")
+    if not client_key or not image:
+        return None
+    task = {"type": "ImageToTextTask", "module": module, "body": _b64.b64encode(image).decode()}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout + 15)) as s:
+            async with s.post(f"{API}/createTask", json={"clientKey": client_key, "task": task}) as r:
+                j = await r.json(content_type=None)
+            if j.get("errorId"):
+                log.warning("capsolver image createTask error: %s %s", j.get("errorCode"), j.get("errorDescription"))
+                return None
+            if j.get("status") == "ready":
+                return ((j.get("solution") or {}).get("text") or "").strip() or None
+            task_id = j.get("taskId")
+            if not task_id:
+                return None
+            deadline = asyncio.get_event_loop().time() + timeout
+            while asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(2)
+                async with s.post(f"{API}/getTaskResult",
+                                  json={"clientKey": client_key, "taskId": task_id}) as r:
+                    j = await r.json(content_type=None)
+                if j.get("errorId"):
+                    log.warning("capsolver image result error: %s %s", j.get("errorCode"), j.get("errorDescription"))
+                    return None
+                if j.get("status") == "ready":
+                    return ((j.get("solution") or {}).get("text") or "").strip() or None
+    except Exception as e:
+        log.info("capsolver image solve failed: %s", str(e)[:120])
+        return None
+    return None
+
+
 async def diagnose(country: str, mission: str, proxy: str | None = None) -> str:
     """Human-readable check: key present? API reachable? balance? sitekey found?"""
     lines = [f"CAPSOLVER_KEY: {'задан' if enabled() else 'НЕ задан'}"]
