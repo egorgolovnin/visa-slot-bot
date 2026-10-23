@@ -290,24 +290,23 @@ class RkTerminClient:
     async def fetch(self) -> tuple[list[Slot], str]:
         try:
             return await self._fetch()
-        except Blocked as e:
-            await self.close()  # drop the session so a block/captcha starts fresh next time
-            # diplo doesn't need the residential proxy; if the proxy flaked, retry once DIRECT so
-            # Germany doesn't go blind during a proxy outage. Stay direct while it keeps working.
+        except Exception as e:  # Blocked, or a raw network error (CONNECT tunnel 503, timeout, reset)
+            await self.close()  # drop the session so a block/captcha/proxy flake starts fresh next time
+            is_block = isinstance(e, Blocked)
+            # diplo doesn't need the residential proxy; if the PROXY flaked (not a real block), retry once
+            # DIRECT so Germany doesn't go blind during a proxy outage. Stay direct while it keeps working.
             if self.pool and not self._force_direct and any(s in str(e).lower() for s in self._PROXY_ERR):
                 self._force_direct = True
                 try:
                     return await self._fetch()
-                except Blocked:
+                except Exception:  # direct didn't help either: go back to a (next) proxy next cycle
                     await self.close()
-                    self._force_direct = False  # direct didn't help either
-                    self.pool.rotate()          # move to the next proxy for the next cycle
-                    raise
-            if self._force_direct:
+                    self._force_direct = False
+                    self.pool.rotate()
+            elif self._force_direct:
                 self._force_direct = False  # direct mode started failing — swing back to the proxy next cycle
-            raise
-        except Exception as e:  # network errors, timeouts
-            await self.close()
+            if is_block:
+                raise
             raise Blocked(f"rktermin network: {type(e).__name__}: {str(e)[:120]}") from e
 
     async def _fetch(self) -> tuple[list[Slot], str]:
