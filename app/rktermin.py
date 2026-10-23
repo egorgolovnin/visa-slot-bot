@@ -125,8 +125,9 @@ def parse_days(page: str) -> list[date]:
 
 
 class RkTerminClient:
-    def __init__(self, proxy_url: str | None):
-        self.proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+    def __init__(self, proxies=None):
+        from .proxypool import ProxyPool
+        self.pool = ProxyPool(proxies)
         self.category_id: str | None = os.getenv("RK_CATEGORY_ID") or "1955"
         self.last_free_days = 0
         self.last_times: dict[date, list[str]] = {}
@@ -140,7 +141,8 @@ class RkTerminClient:
 
     def _session(self) -> AsyncSession:
         if self.session is None:
-            proxies = None if self._force_direct else self.proxies
+            p = None if self._force_direct else self.pool.current()
+            proxies = {"http": p, "https": p} if p else None
             self.session = AsyncSession(proxies=proxies, timeout=30)
         return self.session
 
@@ -292,13 +294,14 @@ class RkTerminClient:
             await self.close()  # drop the session so a block/captcha starts fresh next time
             # diplo doesn't need the residential proxy; if the proxy flaked, retry once DIRECT so
             # Germany doesn't go blind during a proxy outage. Stay direct while it keeps working.
-            if self.proxies and not self._force_direct and any(s in str(e).lower() for s in self._PROXY_ERR):
+            if self.pool and not self._force_direct and any(s in str(e).lower() for s in self._PROXY_ERR):
                 self._force_direct = True
                 try:
                     return await self._fetch()
                 except Blocked:
                     await self.close()
-                    self._force_direct = False  # direct didn't help either — proxy again next time
+                    self._force_direct = False  # direct didn't help either
+                    self.pool.rotate()          # move to the next proxy for the next cycle
                     raise
             if self._force_direct:
                 self._force_direct = False  # direct mode started failing — swing back to the proxy next cycle

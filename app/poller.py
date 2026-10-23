@@ -61,10 +61,10 @@ class Poller:
         self.s = settings
         self.db = db
         self.notify = notify
-        self.client = VfsPublicClient(settings.country, settings.proxy_url)
-        self.rk = RkTerminClient(settings.proxy_url)
+        self.client = VfsPublicClient(settings.country, settings.proxies)
+        self.rk = RkTerminClient(settings.proxies)
         self.rk_resume_at: datetime | None = None
-        self.ss = SuperSaasClient(settings.proxy_url)
+        self.ss = SuperSaasClient(settings.proxies)
         self.ss_resume_at: datetime | None = None   # throttle/back-off for Greece (SuperSaaS 429s on bursts)
         self.health = Health()
         self._wake = asyncio.Event()

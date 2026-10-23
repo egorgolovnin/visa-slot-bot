@@ -103,14 +103,29 @@ def _is_rate_limited(status: int, text: str) -> bool:
 
 
 class VfsPublicClient:
-    def __init__(self, country: str, proxy_url: str | None):
+    def __init__(self, country: str, proxies=None):
+        from .proxypool import ProxyPool
         self.country = country
-        proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
-        self.session = AsyncSession(proxies=proxies, timeout=30)
+        self.pool = ProxyPool(proxies)
+        self.session = self._new_session()
         self.working_profile: str | None = None
         self._raw_logged: set[str] = set()
         self.last_age_min: int | None = None   # how old VFS's own cached data was, in minutes
         self.first_group_sample: str | None = None  # raw JSON of the first populated slot group ever seen
+
+    def _new_session(self) -> AsyncSession:
+        p = self.pool.current()
+        return AsyncSession(proxies=({"http": p, "https": p} if p else None), timeout=30)
+
+    async def _rotate(self) -> None:
+        """A proxy flaked/banned: move to the next one and rebuild the session (no-op with one proxy)."""
+        if self.pool.size > 1:
+            self.pool.rotate()
+            try:
+                await self.session.close()
+            except Exception:
+                pass
+            self.session = self._new_session()
 
     async def close(self) -> None:
         await self.session.close()
@@ -147,6 +162,7 @@ class VfsPublicClient:
                 continue
             text = r.text or ""
             if _is_rate_limited(r.status_code, text):
+                await self._rotate()  # this proxy is rate-limited: next call uses the next one
                 raise RateLimited(f"{r.status_code}: {text[:120]}")
             if r.status_code == 200 and text.lstrip().startswith("{"):
                 data = r.json()
@@ -169,6 +185,7 @@ class VfsPublicClient:
                 raise NotOffered(text[:200])
             last = f"{r.status_code}: {text[:120]}"
             log.debug("profile %s rejected for %s: %s", profile, mission, last)
+        await self._rotate()  # every profile failed on this proxy: next call uses the next one
         raise Blocked(last)
 
     async def raw_probe(self, code: str) -> str:

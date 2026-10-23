@@ -38,6 +38,7 @@ services:
     volumes:
       - browser_state:/app/state
       - ./app:/app/app      # live code mount: `git pull && docker compose restart bot` picks up code changes without rebuild
+      - ./config:/app/config  # proxy list: the bot reads config/proxies.txt (PROXY_FILE) for its failover pool
 
   site:
     build:

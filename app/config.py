@@ -10,6 +10,43 @@ def _list(raw: str) -> tuple[str, ...]:
     return tuple(x.strip().lower() for x in raw.split(",") if x.strip())
 
 
+def _one_proxy(tok: str, gateway: str) -> str | None:
+    """Accept a full URL, `login:pass@host:port`, or bare `login:pass` / `login pass`
+    (bare creds get the shared gateway host:port prepended)."""
+    tok = tok.strip()
+    if not tok or tok.startswith("#"):
+        return None
+    if "://" in tok:
+        return tok
+    if "@" in tok:
+        return "http://" + tok
+    parts = tok.replace(":", " ").split()
+    if len(parts) >= 2:
+        return f"http://{parts[0]}:{parts[1]}@{gateway}"
+    return None
+
+
+def _proxies(raw: str, extra: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Build the proxy pool from PROXY_URL (comma/newline-separated) plus lines from PROXY_FILE.
+    Deduplicated, order preserved. Bare `login pass` entries use PROXY_GATEWAY."""
+    gateway = os.getenv("PROXY_GATEWAY", "res.proxy-seller.com:10000")
+    out: list[str] = []
+    for tok in raw.replace("\n", ",").split(",") + list(extra):
+        p = _one_proxy(tok, gateway)
+        if p:
+            out.append(p)
+    return tuple(dict.fromkeys(out))
+
+
+def _proxy_file_lines() -> tuple[str, ...]:
+    path = os.getenv("PROXY_FILE", "config/proxies.txt")
+    try:
+        with open(path) as f:
+            return tuple(f.read().replace(",", "\n").splitlines())
+    except OSError:
+        return ()
+
+
 @dataclass(frozen=True)
 class Settings:
     bot_token: str
@@ -19,7 +56,8 @@ class Settings:
     channel: str | None        # public channel for announcements, e.g. @bestvisaeurope (bot must be its admin)
     manager: str | None        # human manager contact shown to clients, e.g. @bestvisamanager
     manager_name: str          # manager display name, e.g. Алена
-    proxy_url: str | None
+    proxy_url: str | None        # first proxy (single-proxy consumers: cf, capsolver, vfs_auth, probes)
+    proxies: tuple[str, ...]      # full pool for the monitoring clients (failover across them)
     poll_interval: int          # seconds between full cycles
     missions: tuple[str, ...]   # empty = auto-discover which countries VFS serves in Cyprus
     country: str
@@ -61,7 +99,8 @@ def load() -> Settings:
         channel=(os.getenv("CHANNEL", "").strip() or None),
         manager=(os.getenv("MANAGER", "").strip() or None),
         manager_name=(os.getenv("MANAGER_NAME", "Алена").strip()),
-        proxy_url=os.getenv("PROXY_URL") or None,
+        proxy_url=(_proxies(os.getenv("PROXY_URL", ""), _proxy_file_lines()) or (None,))[0],
+        proxies=_proxies(os.getenv("PROXY_URL", ""), _proxy_file_lines()),
         poll_interval=int(os.getenv("POLL_INTERVAL_SEC", "600")),
         missions=_list(os.getenv("MISSIONS", "")),
         country=os.getenv("VFS_COUNTRY", "cyp"),

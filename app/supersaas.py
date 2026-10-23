@@ -72,8 +72,9 @@ def no_free_slots(page: str) -> bool:
 
 
 class SuperSaasClient:
-    def __init__(self, proxy_url: str | None):
-        self.proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+    def __init__(self, proxies=None):
+        from .proxypool import ProxyPool
+        self.pool = ProxyPool(proxies)
         self.email = os.getenv("SUPERSAAS_EMAIL", "")
         self.password = os.getenv("SUPERSAAS_PASSWORD", "")
         self.session: AsyncSession | None = None
@@ -119,7 +120,8 @@ class SuperSaasClient:
     async def _login(self) -> None:
         if self.session:
             await self.session.close()
-        self.session = AsyncSession(proxies=self.proxies, timeout=30, impersonate="chrome")
+        p = self.pool.current()
+        self.session = AsyncSession(proxies=({"http": p, "https": p} if p else None), timeout=30, impersonate="chrome")
         login_url = f"{BASE}/schedule/login/{ACCOUNT}/{SCHEDULE}"
         r = await self.session.get(login_url)
         r = await self._answer_challenge(r)
@@ -146,9 +148,11 @@ class SuperSaasClient:
         try:
             return await self._fetch()
         except Blocked:
+            self.pool.rotate()  # try the next proxy next time (if any)
             await self.close()  # drop the session so a 429 "too many requests from this browser" retries fresh
             raise
         except Exception as e:
+            self.pool.rotate()
             await self.close()
             raise Blocked(f"supersaas network: {type(e).__name__}: {str(e)[:120]}") from e
 
