@@ -92,18 +92,39 @@ def solve_captcha(image: bytes) -> str | None:
     return votes.most_common(1)[0][0]
 
 
+def _upscaled_png(image: bytes) -> bytes:
+    """A 3x, denoised, high-contrast PNG — Capsolver's generic model reads the full 6 chars off this
+    more reliably than off the raw 150px gif (on which it tends to drop characters)."""
+    try:
+        import cv2
+        import numpy as np
+        img = cv2.imdecode(np.frombuffer(image, np.uint8), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return image
+        big = cv2.resize(img, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        _, otsu = cv2.threshold(cv2.medianBlur(big, 3), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return cv2.imencode(".png", otsu)[1].tobytes()
+    except Exception:
+        return image
+
+
 async def solve_captcha_text(image: bytes) -> str | None:
-    """Prefer Capsolver (≈3–5s, high hit-rate) when CAPSOLVER_KEY is set; fall back to local ddddocr.
-    Either way the answer is normalised to exactly 6 chars of [a-z0-9]."""
+    """ddddocr first — free, instant, and tuned for the exact 6-char [a-z0-9] format (it votes across
+    2 models x 7 preprocessings). Only when it returns nothing usable do we spend a Capsolver call as
+    a rescue, on an upscaled image, since Capsolver's generic model under-reads the raw captcha."""
+    local = solve_captcha(image)
+    if local:
+        return local
     from . import capsolver
     if capsolver.enabled():
-        raw = await capsolver.solve_image(image)
+        raw = await capsolver.solve_image(_upscaled_png(image))
         if raw:
             txt = re.sub(r"[^a-z0-9]", "", raw.lower())
             if len(txt) == 6:
+                log.info("capsolver rescued the captcha where ddddocr failed")
                 return txt
-            log.info("capsolver image gave %r (len %d) — falling back to ddddocr", raw, len(txt))
-    return solve_captcha(image)
+            log.info("capsolver rescue gave %r (len %d) — unusable", raw, len(txt))
+    return None
 
 
 def find_schengen_category(page: str) -> str | None:
