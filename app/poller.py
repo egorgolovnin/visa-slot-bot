@@ -191,27 +191,34 @@ class Poller:
                                      max(1800, self.s.poll_interval * 3), None, uptime)
 
     async def _check_proxy(self, fail: int) -> int:
-        """Ping a stable endpoint through the proxy. Two misses in a row -> alert once (every source
-        goes through this proxy, so its death blinds all of them at once)."""
+        """Ping a stable endpoint through EACH proxy in the pool. The clients rotate across them, so
+        one dead proxy doesn't blind anyone — alert only when the WHOLE pool is down (2 checks in a
+        row). A partial outage is just logged (alive/total)."""
         from curl_cffi.requests import AsyncSession
-        ok = False
-        try:
-            async with AsyncSession(proxies={"http": self.s.proxy_url, "https": self.s.proxy_url},
-                                    timeout=20) as s:
-                r = await s.get("https://api.ipify.org", impersonate="chrome")
-                ok = r.status_code == 200 and bool((r.text or "").strip())
-        except Exception as e:
-            log.info("proxy check failed: %s", type(e).__name__)
-        if not ok:
+        pool = self.s.proxies or ((self.s.proxy_url,) if self.s.proxy_url else ())
+        if not pool:
+            return 0
+        alive = 0
+        for i, p in enumerate(pool):
+            try:
+                async with AsyncSession(proxies={"http": p, "https": p}, timeout=20) as s:
+                    r = await s.get("https://api.ipify.org", impersonate="chrome")
+                    if r.status_code == 200 and (r.text or "").strip():
+                        alive += 1
+                        continue
+            except Exception as e:
+                log.info("proxy[%d] check failed: %s", i, type(e).__name__)
+        log.info("proxy pool: %d/%d alive", alive, len(pool))
+        if alive == 0:
             fail += 1
             if fail >= 2 and not self._proxy_alerted:
                 self._proxy_alerted = True
-                await self.alert_admins("🧵 Прокси не отвечает (2 проверки подряд). Все источники идут "
-                                        "через него и могут ослепнуть. Проверь баланс/доступ PROXY_URL.")
+                await self.alert_admins(f"🧵 Все прокси не отвечают ({len(pool)} шт., 2 проверки подряд). "
+                                        "Источники могут ослепнуть. Проверь баланс/доступ прокси.")
             return fail
         if self._proxy_alerted:
             self._proxy_alerted = False
-            await self.alert_admins("🧵 Прокси снова отвечает.")
+            await self.alert_admins(f"🧵 Прокси снова отвечают ({alive}/{len(pool)} живых).")
         return 0
 
     def page_url(self, code: str) -> str:
