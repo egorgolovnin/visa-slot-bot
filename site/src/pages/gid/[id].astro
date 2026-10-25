@@ -23,7 +23,10 @@ const article = {
   publisher: { '@id': new URL('/#org', Astro.site).href },
   citation: d.sources.map((s) => s.url),
 };
-const related = all.filter((e) => e.id !== entry.id).slice(0, 3);
+// "Next 3 by order, wrapping around" so every article links forward to three others and internal
+// link equity reaches all of them (a plain slice(0,3) always pointed at the first three only).
+const i = all.findIndex((e) => e.id === entry.id);
+const related = [1, 2, 3].map((k) => all[(i + k) % all.length]).filter((e) => e && e.id !== entry.id);
 const ctaText = { order: 'Записаться через бота', wheel: 'Крутить колесо скидок', invite: 'Получить реферальную ссылку' }[d.cta];
 ---
 <Base title={d.seoTitle} description={d.description} ogType="article" published={d.published} modified={d.updated} jsonLd={[article]}>
