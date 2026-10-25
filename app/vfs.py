@@ -43,6 +43,12 @@ class NotOffered(Exception):
     """VFS does not serve this mission in this country."""
 
 
+class VfsEmpty(NotOffered):
+    """200 OK with valid JSON but no vacList at all (totalVac null) — VFS returned an empty answer.
+    For an already-offered country this is a transient VFS-side hiccup, not a real de-listing or a
+    bug on our side, so the poller treats it gently rather than as a hard error."""
+
+
 @dataclass(frozen=True)
 class Slot:
     mission: str
@@ -182,7 +188,8 @@ class VfsPublicClient:
                                 self.first_group_sample = _json.dumps(grp[0], ensure_ascii=False)[:600]
                                 break
                     return parse_response(code, data), str(data.get("lastUpdatedOn") or "")
-                raise NotOffered(text[:200])
+                # 200 + valid JSON but no vacList: VFS returned an empty/placeholder answer.
+                raise VfsEmpty(text[:200])
             last = f"{r.status_code}: {text[:120]}"
             log.debug("profile %s rejected for %s: %s", profile, mission, last)
         await self._rotate()  # every profile failed on this proxy: next call uses the next one

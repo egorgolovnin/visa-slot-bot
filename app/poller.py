@@ -15,7 +15,7 @@ from .db import Database
 from .diff import EARLIER, NOTIFY_KINDS, OPENED, Change, diff
 from .rktermin import RkTerminClient
 from .supersaas import SuperSaasClient
-from .vfs import SCHENGEN, Blocked, NotOffered, RateLimited, Slot, VfsPublicClient
+from .vfs import SCHENGEN, Blocked, NotOffered, RateLimited, Slot, VfsEmpty, VfsPublicClient
 
 log = logging.getLogger("poller")
 
@@ -26,6 +26,8 @@ ADAPTIVE_FRESH_MIN = int(os.getenv("ADAPTIVE_FRESH_MIN", "5"))  # VFS data this 
 ADAPTIVE_MAX_MIN = int(os.getenv("ADAPTIVE_MAX_MIN", "15"))     # never defer a VFS country longer than this (min)
 STALE_DATA_MIN = 360          # VFS data older than this (minutes) = its cache is frozen, "no slots" unreliable
 TRANSIENT_ALERT_AFTER = 6     # VFS's empty/1019/1020 answers come and go: wait ~1 hour before alerting
+EMPTY_ALERT_AFTER = 20        # VFS returning an all-null answer for an offered country: VFS-side hiccup, alert late
+EMPTY_DEFER_MIN = 5           # back off a country VFS is answering empty, so we don't hammer it every cycle
 MAX_BACKOFF = 6               # max multiplier of the VFS poll interval after 429s
 RK_COOLDOWN = 1800            # seconds to leave RK-Termin alone after a failed check
 SS_INTERVAL = 1800            # min seconds between SuperSaaS (Greece) polls — it rate-limits bursts (429)
@@ -81,6 +83,8 @@ class Poller:
         self._silent: set[str] = set()              # sources we've alerted about going silent
         self._proxy_alerted = False                 # whether we've alerted that the proxy is down
         self._vfs_next_due: dict[str, datetime] = {}  # adaptive per-country schedule from VFS cache freshness
+        self._empty_count: dict[str, int] = {}        # consecutive all-null VFS answers per country
+        self._empty_alerted: set[str] = set()         # countries we've flagged as VFS-empty
 
     async def close(self) -> None:
         await self.client.close()
@@ -351,6 +355,20 @@ class Poller:
             self.health.backoff = min(self.health.backoff * 2, MAX_BACKOFF)
             await self._failed(code, name, f"429: {e}")
             return "ratelimited"
+        except VfsEmpty:
+            # VFS answered 200 but with an all-null body for an already-offered country: a VFS-side
+            # hiccup, not our error. Record it as "responded, no data", back off, alert late and gently.
+            n = self._empty_count.get(code, 0) + 1
+            self._empty_count[code] = n
+            log.info("VFS empty answer for %s (%d in a row)", code, n)
+            await self.db.add_observation(code, False, None, 0, None, None)
+            if n >= EMPTY_ALERT_AFTER and code not in self._empty_alerted:
+                self._empty_alerted.add(code)
+                await self.alert_admins(
+                    f"ℹ️ {html.escape(name)}: VFS уже {n} проверок отдаёт пустой ответ — временный сбой "
+                    "на стороне VFS, слоты по этой стране сейчас не видны. Обычно проходит само.")
+            self._vfs_next_due[code] = now + timedelta(minutes=EMPTY_DEFER_MIN)
+            return "empty"
         except NotOffered as e:
             # mid-cycle this is VFS's transient empty/1019/1020 answer: never disable a country here
             await self._failed(code, name, str(e), threshold=TRANSIENT_ALERT_AFTER)
@@ -484,6 +502,10 @@ class Poller:
         if code in h.alerted:
             h.alerted.discard(code)
             await self.alert_admins(f"✅ {html.escape(name)}: проверки снова работают.")
+        self._empty_count[code] = 0
+        if code in self._empty_alerted:
+            self._empty_alerted.discard(code)
+            await self.alert_admins(f"✅ {html.escape(name)}: VFS снова отдаёт данные.")
 
     async def _announce(self, code: str, name: str, changes: list[Change], updated: str) -> None:
         now = datetime.now(timezone.utc)
