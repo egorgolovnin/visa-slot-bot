@@ -1,10 +1,13 @@
 ---
+import { getCollection } from 'astro:content';
 import Base from '../layouts/Base.astro';
 import Breadcrumbs from '../components/Breadcrumbs.astro';
 import BotButton from '../components/BotButton.astro';
 import { BOT_COUNTRIES, DIRECT_COUNTRIES, FACTS_CHECKED } from '../site';
 
 const checked = new Date(FACTS_CHECKED + 'T12:00:00Z').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+// countries that have their own detail page, matched by display name
+const pages = new Map((await getCollection('strany')).map((e) => [e.data.name, e.id]));
 ---
 <Base
   title="Куда подавать на шенген с Кипра: 18 стран — Easy Visa"
@@ -22,8 +25,8 @@ const checked = new Date(FACTS_CHECKED + 'T12:00:00Z').toLocaleDateString('ru-RU
         <tbody>
           {BOT_COUNTRIES.map((c) => (
             <tr>
-              <th scope="row">{c.name}</th>
-              <td>{c.note ?? '—'}</td>
+              <th scope="row">{pages.has(c.name) ? <a href={`/strany/${pages.get(c.name)}/`}>{c.name}</a> : c.name}</th>
+              <td>{c.note ?? (pages.has(c.name) ? <a href={`/strany/${pages.get(c.name)}/`}>Подробнее о записи →</a> : '—')}</td>
             </tr>
           ))}
         </tbody>
