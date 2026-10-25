@@ -8,6 +8,11 @@ import { BOT_COUNTRIES, DIRECT_COUNTRIES, FACTS_CHECKED } from '../site';
 const checked = new Date(FACTS_CHECKED + 'T12:00:00Z').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 // countries that have their own detail page, matched by display name
 const pages = new Map((await getCollection('strany')).map((e) => [e.data.name, e.id]));
+// where a country's row should link: its own page, or the Germany page for the countries it represents
+const linkFor = (c: { name: string; system: string }) =>
+  pages.has(c.name) ? `/strany/${pages.get(c.name)}/`
+  : c.system === 'посольство Германии' && pages.has('Германия') ? '/strany/germaniya/'
+  : null;
 ---
 <Base
   title="Куда подавать на шенген с Кипра: 18 стран — Easy Visa"
@@ -23,12 +28,15 @@ const pages = new Map((await getCollection('strany')).map((e) => [e.data.name, e
       <table>
         <thead><tr><th scope="col">Страна</th><th scope="col">Особенности</th></tr></thead>
         <tbody>
-          {BOT_COUNTRIES.map((c) => (
-            <tr>
-              <th scope="row">{pages.has(c.name) ? <a href={`/strany/${pages.get(c.name)}/`}>{c.name}</a> : c.name}</th>
-              <td>{c.note ?? (pages.has(c.name) ? <a href={`/strany/${pages.get(c.name)}/`}>Подробнее о записи →</a> : '—')}</td>
-            </tr>
-          ))}
+          {BOT_COUNTRIES.map((c) => {
+            const href = linkFor(c);
+            return (
+              <tr>
+                <th scope="row">{href ? <a href={href}>{c.name}</a> : c.name}</th>
+                <td>{c.note ?? (href ? <a href={href}>Подробнее о записи →</a> : '—')}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
