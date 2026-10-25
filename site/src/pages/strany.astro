@@ -8,10 +8,16 @@ import { BOT_COUNTRIES, DIRECT_COUNTRIES, FACTS_CHECKED } from '../site';
 const checked = new Date(FACTS_CHECKED + 'T12:00:00Z').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 // countries that have their own detail page, matched by display name
 const pages = new Map((await getCollection('strany')).map((e) => [e.data.name, e.id]));
-// where a country's row should link: its own page, or the Germany page for the countries it represents
-const linkFor = (c: { name: string; system: string }) =>
+// countries covered on another country's page (the embassy that represents them on Cyprus)
+const repPage: Record<string, string> = {
+  'Нидерланды': 'germaniya', 'Бельгия': 'germaniya', 'Дания': 'germaniya',
+  'Норвегия': 'germaniya', 'Исландия': 'germaniya', 'Люксембург': 'germaniya',
+  'Чехия': 'slovakiya', 'Словения': 'slovakiya',
+};
+// where a country's row should link: its own page, or the page of the embassy that represents it
+const linkFor = (c: { name: string }) =>
   pages.has(c.name) ? `/strany/${pages.get(c.name)}/`
-  : c.system === 'посольство Германии' && pages.has('Германия') ? '/strany/germaniya/'
+  : repPage[c.name] ? `/strany/${repPage[c.name]}/`
   : null;
 ---
 <Base
