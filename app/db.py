@@ -590,6 +590,13 @@ class Database:
     async def first_observation(self) -> datetime | None:
         return await self.pool.fetchval("SELECT min(at) FROM observations")
 
+    async def prune_observations(self, days: int) -> int:
+        """Drop observations older than `days`. They're written on every poll, so at the current
+        cadence the table grows ~thousands of rows/day; the digests only ever look back a week."""
+        return int(await self.pool.fetchval(
+            """WITH d AS (DELETE FROM observations WHERE at < now() - make_interval(days => $1) RETURNING 1)
+               SELECT count(*) FROM d""", days) or 0)
+
     async def catch_counts(self, mission: str) -> tuple[int, int]:
         """How many slot catches we've logged (kind opened/earlier): for this mission, and total."""
         row = await self.pool.fetchrow(

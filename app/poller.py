@@ -28,6 +28,7 @@ STALE_DATA_MIN = 360          # VFS data older than this (minutes) = its cache i
 TRANSIENT_ALERT_AFTER = 6     # VFS's empty/1019/1020 answers come and go: wait ~1 hour before alerting
 EMPTY_ALERT_AFTER = 20        # VFS returning an all-null answer for an offered country: VFS-side hiccup, alert late
 EMPTY_DEFER_MIN = 5           # back off a country VFS is answering empty, so we don't hammer it every cycle
+OBS_RETENTION_DAYS = int(os.getenv("OBS_RETENTION_DAYS", "30"))  # observations older than this are pruned daily
 MAX_BACKOFF = 6               # max multiplier of the VFS poll interval after 429s
 RK_COOLDOWN = 1800            # seconds to leave RK-Termin alone after a failed check
 SS_INTERVAL = 1800            # min seconds between SuperSaaS (Greece) polls — it rate-limits bursts (429)
@@ -85,6 +86,7 @@ class Poller:
         self._vfs_next_due: dict[str, datetime] = {}  # adaptive per-country schedule from VFS cache freshness
         self._empty_count: dict[str, int] = {}        # consecutive all-null VFS answers per country
         self._empty_alerted: set[str] = set()         # countries we've flagged as VFS-empty
+        self._last_prune: datetime | None = None       # last time old observations were pruned
 
     async def close(self) -> None:
         await self.client.close()
@@ -159,6 +161,16 @@ class Poller:
             # (c) proxy liveness, roughly every 6 min
             if self.s.proxy_url and tick % 3 == 0:
                 proxy_fail = await self._check_proxy(proxy_fail)
+            # (d) retention: observations are written every poll — prune the old ones once a day
+            now_utc = datetime.now(timezone.utc)
+            if self._last_prune is None or (now_utc - self._last_prune).total_seconds() > 86400:
+                self._last_prune = now_utc
+                try:
+                    n = await self.db.prune_observations(OBS_RETENTION_DAYS)
+                    if n:
+                        log.info("pruned %d observations older than %dd", n, OBS_RETENTION_DAYS)
+                except Exception:
+                    log.exception("observation prune")
             await asyncio.sleep(120)
 
     async def _silence_flag(self, code: str, name: str, age: float, limit: float,
