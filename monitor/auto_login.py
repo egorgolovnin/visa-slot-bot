@@ -1,7 +1,7 @@
 
 
 from __future__ import annotations
-import argparse, asyncio, base64, json, random, re, time, uuid, sys
+import argparse, asyncio, base64, json, os, random, re, time, uuid, sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
@@ -16,7 +16,12 @@ DATA = ROOT / "data"
 DATA.mkdir(parents=True, exist_ok=True)
 
 LIFT_API = "https://lift-api.vfsglobal.com"
-LOGIN_PAGE = "https://visa.vfsglobal.com/uzb/en/lva/login"
+VFS_COUNTRY = os.environ.get("VFS_COUNTRY", "cyp")
+VFS_MISSION = os.environ.get("VFS_MISSION", "aut")
+VFS_CENTER  = os.environ.get("VFS_CENTER", "NIC")
+ROUTE       = f"{VFS_COUNTRY}/en/{VFS_MISSION}"
+LOGIN_PAGE  = f"https://visa.vfsglobal.com/{ROUTE}/login"
+TURNSTILE_SITEKEY = os.environ.get("TURNSTILE_SITEKEY", "0x4AAAAAABhlz7Ei4byodYjs")
 TURNSTILE_SITEKEY = "0x4AAAAAABhlz7Ei4byodYjs"
 
 PEM = (ROOT / "config" / "csk_pubkey.pem").read_bytes()
@@ -187,7 +192,7 @@ async def auto_login(email: str, password: str, max_retries: int = 3, fixed_prox
                                                                                                     
         try:
             async with AsyncSession(impersonate=imp, proxies={"http": proxy, "https": proxy}, verify=False) as _pc:
-                _pr = await _pc.get("https://visa.vfsglobal.com/uzb/en/lva/login", timeout=12)
+                _pr = await _pc.get(LOGIN_PAGE, timeout=12)
             if _pr.status_code == 403 or "Just a moment" in (_pr.text[:600] or ""):
                 print(f"  пре-чек: IP CF-флагнут → ротация БЕЗ капчи (Capsolver цел)", flush=True)
                 continue
@@ -220,7 +225,7 @@ async def auto_login(email: str, password: str, max_retries: int = 3, fixed_prox
             "origin": "https://visa.vfsglobal.com",
             "priority": "u=1, i",
             "referer": "https://visa.vfsglobal.com/",
-            "route": "uzb/en/lva",
+            "route": ROUTE,
             "sec-ch-ua": fp["sec"],
             "sec-ch-ua-mobile": "?0", "sec-ch-ua-platform": fp["plat"],
             "sec-fetch-dest": "empty", "sec-fetch-mode": "cors", "sec-fetch-site": "same-site",
@@ -231,7 +236,7 @@ async def auto_login(email: str, password: str, max_retries: int = 3, fixed_prox
                                 verify=False) as s:
                                                
             try:
-                r1 = await s.get("https://visa.vfsglobal.com/uzb/en/lva/login",
+                r1 = await s.get(LOGIN_PAGE,
                                  headers={"accept": "text/html", "user-agent": ua,
                                           "accept-language": headers_base["accept-language"]},
                                  cookies=cookies, timeout=15)
@@ -244,7 +249,7 @@ async def auto_login(email: str, password: str, max_retries: int = 3, fixed_prox
             try:
                 cfg_headers = {**headers_base, "accept": "application/json, text/plain, */*",
                                "clientsource": cs_now()}
-                r2 = await s.get(f"{LIFT_API}/configuration/fields/lva/uzb",
+                r2 = await s.get(f"{LIFT_API}/configuration/fields/{VFS_MISSION}/{VFS_COUNTRY}",
                                  headers=cfg_headers, cookies=cookies, timeout=15)
                 cookies.update(dict(r2.cookies))
                 print(f"  warm lift-cfg: {r2.status_code} +{list(dict(r2.cookies))}", flush=True)
@@ -255,7 +260,7 @@ async def auto_login(email: str, password: str, max_retries: int = 3, fixed_prox
             body = urlencode({
                 "username": email,
                 "password": rsa_encrypt(password.encode()),
-                "missioncode": "lva", "countrycode": "uzb", "languageCode": "en-US",
+                "missioncode": VFS_MISSION, "countrycode": VFS_COUNTRY, "languageCode": "en-US",
                 "captcha_version": "cloudflare-v1", "captcha_api_key": turnstile,
             })
             login_headers = {**headers_base,
@@ -304,7 +309,7 @@ async def auto_login(email: str, password: str, max_retries: int = 3, fixed_prox
                 session = {
                     "captured_at": int(time.time()),
                     "loginUser": email,
-                    "countryCode": "uzb", "missionCode": "lva", "centerCode": "TAS",
+                    "countryCode": VFS_COUNTRY, "missionCode": VFS_MISSION, "centerCode": VFS_CENTER,
                     "jwt": data["accessToken"],
                     "csk_str_raw": PEM.decode().replace("-----BEGIN PUBLIC KEY-----\n", "").replace("\n-----END PUBLIC KEY-----\n", ""),
                     "cookies": cookies,

@@ -8,6 +8,13 @@ import multi_auto_run as M
 from tg_notifier import broadcast
 ROOT="/opt/vfs-monitor"; NODE=os.environ.get("NODE_NAME","?")
 WORK={"LSHMEDCL":"Work UZB","LNGWORK":"Cargo UZB","LNGRSDTJK":"Work TJK","LNGWORKTJK":"Cargo TJK"}
+try:
+    _cfg=json.load(open(ROOT+"/config/datewatch.json"))
+    WORK=_cfg.get("categories",WORK) or WORK
+    CTRL=_cfg.get("control",CTRL)
+    TITLE=_cfg.get("title","LVA")
+except Exception:
+    CTRL=CTRL; TITLE="LVA"
 STATE=ROOT+f"/data/datewatch_{NODE}.json"
 NSESS=int(os.environ.get("NSESS","3")); CYCLE=int(os.environ.get("CYCLE","8")); SESS_TTL=2700; HB_GAP=864000
 def px():
@@ -47,11 +54,11 @@ async def check_one(sess,code):
     return parse(res),"ok"
 async def check_all(sess):
                                                                         
-    sd,stt=await check_one(sess,"LNGSTUD")
+    sd,stt=await check_one(sess,CTRL)
     if stt=="dead": return None,"dead"
     if stt=="throttled": return None,"throttled"
     if stt!="ok" or not sd: return None,"softblock"
-    out={"LNGSTUD":sd}
+    out={CTRL:sd}
     for code in WORK:
         await asyncio.sleep(random.uniform(2,4))                              
         d,s2=await check_one(sess,code)
@@ -83,14 +90,14 @@ async def loop():
                         newd=[x for x in d if x not in prevcats.get(code,[])]
                         if newd: realalerts.append("\U0001f3af "+name+": "+", ".join(short(x) for x in newd))
                         prevcats[code]=d
-                    prevcats["LNGSTUD"]=res.get("LNGSTUD",[])
-                    summary=f"\U0001f4cb VFS [{NODE}] (LVA):\n"+"\n".join(lines)+"\n⏱ "+time.strftime("%d.%m %H:%M:%S")
+                    prevcats[CTRL]=res.get(CTRL,[])
+                    summary=f"\U0001f4cb VFS [{NODE}] ({TITLE}):\n"+"\n".join(lines)+"\n⏱ "+time.strftime("%d.%m %H:%M:%S")
                     if realalerts:
                         broadcast("\U0001f6a8\U0001f6a8 НОВЫЕ СЛОТЫ! ["+NODE+"]\n"+"\n".join(realalerts)+"\n\n"+summary); last_hb=time.time()
                     elif time.time()-last_hb>=HB_GAP:
                         broadcast(summary); last_hb=time.time()
                     json.dump({"cats":prevcats,"last_hb":last_hb},open(STATE,"w"))
-                    print(summary.splitlines()[-1]+" | Студ:"+(",".join(short(x) for x in res.get("LNGSTUD",[])) or "-"),flush=True)
+                    print(summary.splitlines()[-1]+" | Студ:"+(",".join(short(x) for x in res.get(CTRL,[])) or "-"),flush=True)
             if len(sessions)<NSESS:
                 s=await fresh()
                 if s: sessions.append(s); fail=0

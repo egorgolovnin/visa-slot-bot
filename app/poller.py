@@ -23,7 +23,8 @@ Notify = Callable[[int, str], Awaitable[bool]]
 
 FAIL_ALERT_AFTER = 3          # failed checks in a row before admins hear about one country
 ADAPTIVE_FRESH_MIN = int(os.getenv("ADAPTIVE_FRESH_MIN", "5"))  # VFS data this fresh (min) -> poll every cycle
-ADAPTIVE_MAX_MIN = int(os.getenv("ADAPTIVE_MAX_MIN", "15"))     # never defer a VFS country longer than this (min)
+ADAPTIVE_MAX_MIN = int(os.getenv("ADAPTIVE_MAX_MIN", "15"))
+ADAPTIVE_MAX_MIN = min(ADAPTIVE_MAX_MIN, 20)  # выше ~20 мин начнутся ложные алерты (окно тишины 30 мин)     # never defer a VFS country longer than this (min)
 STALE_DATA_MIN = 360          # VFS data older than this (minutes) = its cache is frozen, "no slots" unreliable
 TRANSIENT_ALERT_AFTER = 6     # VFS's empty/1019/1020 answers come and go: wait ~1 hour before alerting
 EMPTY_ALERT_AFTER = 20        # VFS returning an all-null answer for an offered country: VFS-side hiccup, alert late

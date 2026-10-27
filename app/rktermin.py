@@ -334,7 +334,8 @@ class RkTerminClient:
                 self._force_direct = True
                 try:
                     return await self._fetch()
-                except Exception:  # direct didn't help either: go back to a (next) proxy next cycle
+                except Exception as e2:  # direct didn't help either: go back to a (next) proxy next cycle
+                    log.warning("rk direct retry failed: %s: %s", type(e2).__name__, str(e2)[:120])
                     await self.close()
                     self._force_direct = False
                     self.pool.rotate()

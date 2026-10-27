@@ -5,13 +5,13 @@ import aiohttp, yaml
 from curl_cffi.requests import AsyncSession
 
 sys.path.insert(0, "/opt/vfs-monitor")
-from auto_login import auto_login as do_login, cs_now, DATA, ROOT, LIFT_API
+from auto_login import auto_login as do_login, cs_now, DATA, ROOT, LIFT_API, VFS_COUNTRY, VFS_MISSION, VFS_CENTER
 from tg_notifier import broadcast                                                
 
 TG_TOKEN = os.getenv("TG_TOKEN", "")
 TG_CHAT = int(os.getenv("OWNER_CHAT_ID", "0"))
 NODE = os.environ.get("NODE_NAME", "node")
-CONTROL_CAT = "LNGSTUD"                                                               
+CONTROL_CAT = os.environ.get("CONTROL_CAT", "LNGSTUD")                                                               
 POOL_STATE = DATA / f"pool_state_{NODE}.json"
 _ns = {"node": NODE, "ts": 0, "accts": 0, "live": 0, "control_ok": False, "cats": {}}
 
@@ -60,6 +60,14 @@ CATEGORIES = {
     "LNGRSDTJK":  "Work TJK",
     "LNGWORKTJK": "Cargo drivers TJK",
 }
+try:
+    _cfg = json.load(open(ROOT / "config" / "datewatch.json"))
+    if _cfg.get("categories"):
+        CATEGORIES = dict(_cfg["categories"])
+        if _cfg.get("control"):
+            CONTROL_CAT = _cfg["control"]
+except Exception:
+    pass
 
 async def tg_send(text: str):
     try:
@@ -68,7 +76,7 @@ async def tg_send(text: str):
         print(f"  tg_send fail: {e}", flush=True)
 
 async def check_slot(sess: dict, cat: str):
-    body = {"countryCode": "uzb", "missionCode": "lva", "vacCode": "TAS",
+    body = {"countryCode": VFS_COUNTRY, "missionCode": VFS_MISSION, "vacCode": VFS_CENTER,
             "visaCategoryCode": cat, "roleName": sess.get("roleName") or "Individual",
             "loginUser": sess["loginUser"], "payCode": ""}
     h = {
@@ -77,7 +85,7 @@ async def check_slot(sess: dict, cat: str):
         "authorize": sess["jwt"], "clientsource": cs_now(),
         "content-type": "application/json;charset=UTF-8",
         "origin": "https://visa.vfsglobal.com", "priority": "u=1, i",
-        "referer": "https://visa.vfsglobal.com/", "route": "uzb/en/lva",
+        "referer": "https://visa.vfsglobal.com/", "route": f"{VFS_COUNTRY}/en/{VFS_MISSION}",
         "sec-ch-ua": sess.get("sec_ch_ua", '"Chromium";v="136"'), "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": sess.get("sec_ch_ua_platform", '"Windows"'),
         "sec-fetch-dest": "empty", "sec-fetch-mode": "cors", "sec-fetch-site": "same-site",

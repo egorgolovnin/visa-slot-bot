@@ -40,3 +40,17 @@ logs/
 *.bak_*
 *.swapbak-*
 *.catchbak-*
+
+# бот: прокси-пул и деплой-секреты (docker-compose монтирует ./config)
+config/
+deploy.env
+*.env
+!*.env.example
+!deploy.env.template
+
+# сайт: сборка и зависимости
+site/node_modules/
+site/dist/
+
+# браузерное состояние (может содержать куки/сессии)
+state/
